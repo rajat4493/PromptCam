@@ -1,6 +1,6 @@
 # PromptCam — Verification Ledger
 
-**Last updated:** 2026-09-12
+**Last updated:** 2026-09-12 (after review of `f272a18`)
 **Rule:** a row's Result may only be raised by an actual execution. No row is
 marked `VERIFIED_LINUX` without a command that ran here; nothing becomes
 `VERIFIED` on a Mac or a device without that Mac or device.
@@ -25,7 +25,7 @@ hardware result, or it stays as it is.
 | Result | Rows |
 |---|---|
 | `VERIFIED_LINUX` | 9 |
-| `STATICALLY_REVIEWED` | 24 |
+| `STATICALLY_REVIEWED` | 24 + 8 regression rows |
 | `REQUIRES_MAC` | 12 |
 | `REQUIRES_DUO_SIMULATOR` | 4 |
 | `REQUIRES_PHYSICAL_DUO` | 7 |
@@ -53,7 +53,7 @@ been compiled. Read the whole table before describing this app to anyone.
 ## B. Architectural invariants — executed here
 
 Command: `python3 Scripts/static_review.py` → **PASSED**
-(45 Swift files: Core 15/1751 lines, iOS 25/3817 lines, Tests 6/1953 lines; 112 declared test cases)
+(47 Swift files: Core 15/1827 lines, iOS 25/4235 lines, Tests 7/2319 lines; **130** declared test cases)
 
 | # | Requirement | Verification method | Evidence | Result | Remaining limitation |
 |---|---|---|---|---|---|
@@ -128,6 +128,25 @@ All 23 areas the brief requires. Every row is `STATICALLY_REVIEWED` and
 
 ---
 
+## D2. Recording-safety defects found in review of `f272a18`
+
+All three P0s were confirmed against the code before fixing. Every row is
+`STATICALLY_REVIEWED` — the regression tests are written and unexecuted, like
+every other test here.
+
+| # | Defect | Fix | Regression test | Result |
+|---|---|---|---|---|
+| R1 | `cleanUpAbandonedTemporaryFiles()` deleted **every** file in the capture directory, and `begin()` called it unconditionally — so a "preserved" recording was destroyed by the next take. "Kept" was not true. | Persistent `Recovery/` directory the sweeper cannot reach; `preserveForRecovery(temporaryPath:)`; cleanup narrowed to files both older than one hour **and** absent from `excluding:` | `PreservedFileSurvivesCleanupTests` (6 cases, incl. a sweep with `olderThan: 0` that must not touch a preserved file) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R2 | An interruption persisted a terminal outcome, then AVFoundation's later completion callback attempted `store` + `confirmSaved`; `.interrupted → .saveConfirmed` was rejected *after* the file had moved, orphaning it | One idempotent `finalise` guarded by `hasFinalised`, switching on engine state; an already-terminal session reconciles via `attachRecoveredFile` instead of confirming. `attachRecoveredFile` refuses on a saved or in-flight session. Stable `SessionResultSnapshot.identifier` + repository upsert | `LateFileReconciliationTests` (6 cases, incl. one asserting reconciliation yields **one** row) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R3 | Stop could run while `movieOutput.isRecording == false`, so `stopRecording()` did nothing and the session sat in `.finishing` forever | Stop queued until `.recordingStarted` and honoured on arrival; the same guard added inside `AVFoundationCaptureService`; 8-second startup watchdog fails the session with an explanation | `StopDuringStartupTests` (4 cases, incl. `.finishing` accepting a failure so the watchdog has an escape hatch) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R4 | `end()` cancelled `captureTask` but never cleared it, so a later `begin()` silently refused to resubscribe; one single-consumer `AsyncStream` was shared across session models | `captureTask` cleared; capture service created per session via `AppEnvironment.PreparedSession`, which also returns its own `AVCaptureSession` for the preview | `SessionReuseTests` (2 cases) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R5 | The Duo feature was compiled out of both configurations, so the committed app was an ordinary single-screen camera app | `Duo` build configuration and **PromptCam (Duo)** scheme | n/a — build configuration | `REQUIRES_MAC` |
+| R6 | `Double(hinge.angle)` — no such initialiser exists for a SwiftUI `Angle` | `hinge.angle.degrees`; `FoldPosition.partiallyOpen(degrees:)` | n/a | `REQUIRES_MAC` |
+| R7 | "Any captured video has been kept" was not actionable: non-saved outcomes could not be played or shared, and a sandbox path is not a recovery mechanism | `RecordingDetailView` offers a **Recover** `ShareLink`, shown only after `preservedFileExists` confirms the file, and says plainly when a kept file has gone | n/a — UI, UAT 16 | `REQUIRES_MAC` |
+| R8 | `seedSampleDeckIfNeeded` reseeded whenever the database was empty, resurrecting a deliberately deleted sample deck | Persisted `hasSeededSample` flag, set only after a successful write | existing `seedOnce` test | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+
+---
+
 ## E. Privacy and safety requirements
 
 | # | Requirement | Method | Evidence | Result |
@@ -138,9 +157,11 @@ All 23 areas the brief requires. Every row is `STATICALLY_REVIEWED` and
 | E4 | System privacy indicators never bypassed | No attempt to suppress them; nothing in Platform/ touches them | Reviewed | `VERIFIED_LINUX` (absence) |
 | E5 | Interruptions handled | `AVCaptureSession.wasInterruptedNotification`, `runtimeErrorNotification`, `AVAudioSession.interruptionNotification` mapped to `InterruptionReason` | Reviewed | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E6 | Incomplete files never presented as valid | `RecordingOutcome.isPlayable` is the sole playback gate; `playbackURL` also requires the file to exist | Reviewed + tested | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
-| E7 | Safe temporary-file handling | Capture to `Captures/`, move into `Recordings/` only on confirmation | Reviewed | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
-| E8 | Failed/abandoned temporary captures cleaned up | `cleanUpAbandonedTemporaryFiles`, called before a take, never during; cannot reach `Recordings/` | Reviewed + tested | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
-| E9 | A captured file survives a later failure | `store` never deletes on move failure; path recorded in `preservedFilePath`; surfaced in the UI | Reviewed + tested | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E7 | Safe temporary-file handling | Three directories with three lifetimes: `Captures/` (swept), `Recordings/` and `Recovery/` (never swept). Move into `Recordings/` only on OS confirmation | Reviewed | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E8 | Failed/abandoned temporary captures cleaned up | Sweeps `Captures/` only, skipping in-use paths and anything newer than one hour. **Cannot reach `Recordings/` or `Recovery/`** — R1 | Reviewed + 6 regression tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E9 | A captured file survives a later failure | `store` never deletes on move failure; the file is moved into `Recovery/` and that path is recorded, so the sweeper cannot reclaim it — R1 | Reviewed + tested | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E13 | A kept file is recoverable by the user, not just recorded | **Recover** share action, gated on `preservedFileExists` — R7 | Reviewed | `REQUIRES_MAC`, UAT 16 |
+| E14 | A file finalised after the session ended is never reported as saved | `finalise` routes an already-terminal session to reconciliation; `attachRecoveredFile` refuses on a saved session — R2 | Reviewed + 6 regression tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E10 | No recording silently deleted | Library delete removes the row only, never the file | Reviewed | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E11 | No camera kept alive to unlock outer-screen behaviour | `tearDown()` on close; no such coupling exists | Reviewed | `VERIFIED_LINUX` (absence) |
 | E12 | No private APIs | Static review symbol list; all APIs are public Apple surface | Reviewed | `VERIFIED_LINUX` (absence) |
@@ -156,4 +177,6 @@ All 23 areas the brief requires. Every row is `STATICALLY_REVIEWED` and
 | F3 | App Store Review Guidelines reviewed | `BLOCKED` | Not fetched; a founder task |
 | F4 | Privacy manifest / nutrition label | `REQUIRES_MAC` | Answer: no data collected. No third-party SDK, so no `PrivacyInfo.xcprivacy` required, but confirm against current rules |
 | F5 | Screenshots, marketing copy | `BLOCKED` | Must not claim Duo behaviour until S15 is verified |
+| F7 | App icon asset | `VERIFIED_LINUX` (asset exists and is a valid opaque 1024×1024 RGB PNG; CRC-checked) | Generated by `Scripts/make_app_icon.py`. Renders correctly only once built — `REQUIRES_MAC` |
+| F8 | Signing configurable without editing the project spec | `VERIFIED_LINUX` (file present, wired via `configFiles`) | `Support/Signing.xcconfig`; `DEVELOPMENT_TEAM` empty and bundle identifier a placeholder by design |
 | F6 | Duo behaviour claims in listing | `REQUIRES_PHYSICAL_DUO` | **Do not claim what S15 has not proven** |

@@ -1,0 +1,28 @@
+// PromptCam signing and bundle identifier.
+//
+// Committed with safe placeholder values so `xcodegen generate` always works.
+// EDIT THIS FILE LOCALLY — do not commit your team identifier, because a
+// shared DEVELOPMENT_TEAM breaks every other developer's build.
+//
+// To keep your edits out of git:
+//
+//     git update-index --skip-worktree Support/Signing.xcconfig
+//
+// and to undo that later:
+//
+//     git update-index --no-skip-worktree Support/Signing.xcconfig
+
+// Your 10-character Apple Developer Team ID.
+// Find it in Xcode ▸ Settings ▸ Accounts, or the Developer portal's Membership
+// page. Left EMPTY on purpose: Xcode will prompt you to choose a team, which is
+// better than inheriting someone else's.
+DEVELOPMENT_TEAM =
+
+// Your own reverse-DNS bundle identifier.
+//
+// MUST be changed before any device build or TestFlight upload — the default
+// below is a placeholder that cannot be registered with Apple.
+PRODUCT_BUNDLE_IDENTIFIER = com.example.promptcam.PromptCam
+
+// Leave as Automatic unless you manage provisioning profiles by hand.
+CODE_SIGN_STYLE = Automatic

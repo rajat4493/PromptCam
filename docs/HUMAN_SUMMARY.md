@@ -4,6 +4,11 @@ Plain English. No jargon. Read this first.
 
 ---
 
+> **Note.** A review on 2026-09-12 found three serious recording bugs, all now
+> fixed — see "What was fixed after review" below. The short, current version of
+> this document lives in [`duck/HUMAN_SUMMARY.md`](../duck/HUMAN_SUMMARY.md);
+> the delivery ledger is in [`duck/`](../duck/).
+
 ## The one-paragraph version
 
 PromptCam is designed to turn a single iPhone into both a camera and an
@@ -158,6 +163,28 @@ Three things I left out that you might have expected:
 3. **Hinge-angle-driven layout.** Your own guidance said to use reserved regions
    and standard containers for layout, and to treat hinge data as being for
    interaction and effects. So I did that.
+
+---
+
+## What was fixed after review
+
+Three bugs that could each have cost someone a real interview:
+
+1. **A recording the app promised to keep was being deleted** when the next
+   interview started — the cleanup routine emptied the whole capture folder.
+   Files worth keeping now move to a separate folder that cleanup cannot touch,
+   and cleanup only removes files that are both old and not in use.
+2. **A phone call mid-interview could leave the video stranded**: saved to disk
+   with nothing in the app pointing at it. There is now a single path that
+   handles a file arriving late, and it never claims the interview saved when it
+   didn't.
+3. **Tapping stop in the first moment of recording could hang the app** in
+   "Saving" forever, because the stop reached a recorder that hadn't started.
+   Stop is now held until recording genuinely begins, and a timer gives up with
+   an explanation if it never does.
+
+Plus: you can now **recover the video** from a failed interview's detail screen.
+Before, the app printed a file path, which is not something you can act on.
 
 ---
 

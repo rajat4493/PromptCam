@@ -351,7 +351,11 @@ frame, so a consistent offset points at that logic.
   saying any video captured so far has been kept.
 - Step 6: an entry marked **Interrupted**, not Saved.
 - Opening it shows the interruption reason and, if a partial file survived, a
-  **Kept file** path.
+  **Recover** section offering the video.
+- **Check the recovery actually works:** tap **Recover video** and confirm the
+  file saves and plays. An earlier build could finalise the video to disk with
+  nothing in the app pointing at it (ledger row R2), so a missing or broken
+  Recover section here is a `FAIL`.
 - **It must not be offered for playback as a normal interview, and it must not
   be labelled Saved.**
 - Repeat with backgrounding instead of a call (swipe to the home screen
@@ -545,12 +549,24 @@ did the Mac validation to help, or use the storage-filling method below.
 
 **Expected result**
 - Step 4: an alert explaining that the interview was recorded but could not be
-  filed, **and that the video file has been kept**.
+  filed, **and that the video has been kept and can be recovered from the
+  interview's details**.
 - Step 5: the entry is labelled **Not saved** — never **Saved**.
-- The detail screen shows the failure reason and a **Kept file** path.
+- The detail screen shows the failure reason and a **Recover** section with a
+  **Recover video** button.
 - **The interview is not offered for playback as if it were fine, and it is not
   deleted.**
 - Step 6: export may now work; the recording entry is unchanged either way.
+
+**Extra step 7 — recover the video, and prove it survives.**
+1. Tap **Recover video** and save the file to Files or send it to yourself.
+2. Confirm the recovered file plays outside PromptCam.
+3. Now start **another** interview and record 10 seconds. Stop.
+4. Return to the failed interview's detail screen.
+5. **The Recover section must still be there and still work.** An earlier build
+   deleted preserved recordings when the next interview began; this step exists
+   to catch that regression. If the section now reads "the kept video file is no
+   longer on this device", that is a `FAIL` — report it.
 
 **Evidence to capture:** screenshot of the alert; screenshot of the detail
 screen showing "Not saved" and the kept file path.
@@ -559,7 +575,8 @@ screen showing "Not saved" and the kept file path.
 
 **Recovery if it fails:** If it reports **Saved** when it was not, stop and
 report — that is the failure this whole design exists to prevent. If the file
-was deleted, that is equally serious.
+was deleted, or the Recover action disappears after a later interview, that is
+equally serious and is a known past defect (ledger row R1).
 
 ---
 

@@ -1,431 +1,243 @@
 # PromptCam — SDK & Environment Capability Report
 
-**Date of reconnaissance:** 2026-09-12
-**Performed by:** Claude (TheDuck operating method, Stage A)
-**Status:** Reconnaissance complete. Several premises in the original brief were **not confirmed** from this environment.
+**Date:** 2026-09-12 (rewritten after review of commit `f272a18`)
+**Method:** TheDuck operating method, Stage A
+**Authoritative API source:** Apple's iPhone Duo developer guidance, supplied by
+the product owner. See `docs/ASSUMPTIONS.md` §2 for the itemised list.
 
-> ### ⚠ Read §9 first — this report was superseded in part
+> **Why this document was rewritten.** An earlier version led with the
+> conclusion that `CameraCaptureAccessory`, `onHingeChange`, reserved regions,
+> Device Hub and Xcode 27.1 "do not exist", on the strength of searches run
+> from this Linux sandbox. That conclusion was wrong, and leaving it in a
+> prominent position was actively harmful: a future coding agent reading the
+> executive summary would have been told real APIs were fictional. Apple
+> documents Xcode 27.1 and Device Hub, and provides a `CameraCaptureAccessory`
+> teleprompter pattern that is a direct match for PromptCam's use case.
 >
-> Sections 1–8 record what I could and could not confirm **from Apple's
-> published documentation, on Linux, with no Apple toolchain.** After they were
-> written, the product owner supplied Apple's iPhone Duo developer guidance,
-> which asserts a set of APIs I had been unable to find.
->
-> That guidance is authoritative product input and PromptCam is built to it. It
-> does not change what I was able to *verify* — which is still nothing
-> Duo-specific — so both records are kept. **§9 reconciles them.**
-> `docs/ASSUMPTIONS.md` is the current, consolidated register.
-
-This document separates what was *proven*, what was *disproven*, and what remains *assumed*. Nothing in this
-file is stated as fact unless the evidence column shows how it was checked.
+> The searches themselves were real and are reproducible, so they are retained
+> — but scoped honestly to what a sandbox with no Apple toolchain could see,
+> and moved to Appendix B where they cannot be mistaken for a finding about the
+> SDK.
 
 ---
 
-## 0. Executive summary (read this first)
+## 1. Executive summary
 
-Three findings change the shape of the project:
+| | |
+|---|---|
+| **Platform** | iPhone Duo runs iOS 27. Build with Xcode 27.1 / the iOS 27.1 SDK for the intended edge-to-edge and vertical-control behaviour. |
+| **Subject-display API** | `CameraCaptureAccessory`, presented through `View.sceneAccessory(content:)` with `onAvailabilityChange`. This is the camera-application scene accessory, and Apple's own teleprompter pattern for it maps directly onto PromptCam's director/subject split. |
+| **Availability constraints** | The app must be full-screen on the inner display **and** have an active camera-capture session. The system owns availability and may change it at any time; the app must tolerate the accessory disappearing. |
+| **Layout** | Size classes, scene geometry, safe areas and reserved regions. The open inner display reports regular horizontal **and** vertical size classes; the outer display behaves like a compact iPhone environment. |
+| **Hinge** | `onHingeChange` (SwiftUI) / `UIHingeInteraction` (UIKit). Suitable for interaction and effects; reserved-region and arrangement APIs are the recommended tools for layout. |
+| **Cameras** | Duo adds outer and inner ultrawide **front** cameras plus a virtual front camera. PromptCam records the subject with a **rear** camera and does not use them. |
+| **The single blocker** | **No Apple toolchain and no Swift toolchain in this environment.** Nothing has been compiled; no API signature has been confirmed by a compiler. |
 
-1. **This build environment cannot compile Swift at all.** There is no Xcode, no Swift toolchain, no iOS SDK
-   and no Simulator. The session runs on Ubuntu 24.04 / x86-64 Linux. Therefore **no code in this repository
-   has been compiled or executed.** Every claim about the code is design-level only.
-2. **Xcode 27.1 and the iOS 27.1 SDK do not exist yet.** The newest versions Apple documents are
-   **iOS & iPadOS 27 RC** and **Xcode 27 RC**. The brief asked me to confirm 27.1; the honest answer is that
-   27.1 is not a shipping version as of today.
-3. **There is no documented iPhone Duo / foldable API in the iOS 27 SDK.** No hinge API, no fold posture API,
-   no reserved-region API, no `CameraCaptureAccessory`, no "Device Hub". What *does* exist — and what is
-   genuinely useful — is a real second-surface API called **`sceneAccessory`**, but it is documented as an
-   **external display / AirPlay** feature and it is explicitly **non-interactive**.
-
-The product is still buildable and the wedge is still credible, but the Duo-specific claims must be treated as
-an unverified bet, not a confirmed capability. Section 4 explains why building on `sceneAccessory` is
-nonetheless the correct architectural decision either way.
+**What this means in practice.** PromptCam is built to the supplied API surface,
+with every unconfirmed symbol isolated in `Sources/PromptCamiOS/Platform/`
+behind the `PROMPTCAM_DUO` compilation condition and a dedicated `Duo` build
+configuration. The first Mac session confirms the signatures and records any
+correction in `docs/APPLE_API_CORRECTIONS.md`, which has 20 questions
+pre-filled. A wrong signature costs one adapter file, not a rewrite.
 
 ---
 
-## 1. Build environment — what is actually installed
+## 2. Build environment — what is actually installed
 
 | Property | Finding | How verified |
 |---|---|---|
 | Platform | Ubuntu 24.04.4 LTS, Linux 6.18, x86-64, 4 cores | `uname -a`, `/etc/os-release` |
-| `xcodebuild` | **NOT INSTALLED** | `command -v xcodebuild` → not found |
-| `xcrun` / `xcode-select` | **NOT INSTALLED** | `command -v` → not found |
-| `swift` / `swiftc` | **NOT INSTALLED** | `command -v swift` → not found |
-| `simctl` (Simulator) | **NOT INSTALLED** | `command -v simctl` → not found |
-| `/Applications/Xcode*.app` | **ABSENT** | `ls -d` → no match |
-| `/Library/Developer` | **ABSENT** | `ls` → no such directory |
+| `xcodebuild`, `xcrun`, `xcode-select`, `simctl` | **NOT INSTALLED** | `command -v` |
+| `/Applications/Xcode*.app`, `/Library/Developer` | **ABSENT** | `ls` |
 | Installed iOS SDKs | **NONE** | no Xcode, no SDK roots on disk |
-| Swift toolchain installable? | **NO** | `download.swift.org` returns **403 CONNECT** from the egress proxy — an organisation policy denial. Per `/root/.ccr/README.md` these must be reported, not worked around. Ubuntu's `apt` "swift" packages are OpenStack Swift, unrelated. |
-| Available compilers | clang (C/C++), rustc, node, python3, ruby, java | `command -v` |
+| `swift`, `swiftc` | **NOT INSTALLED** | `command -v` |
+| Swift toolchain installable? | **NO** | `download.swift.org`, `archive.swiftlang.xyz` and `apt.swiftlang.xyz` all return **403 CONNECT** — organisation egress policy. Per `/root/.ccr/README.md` a 403 is reported, not routed around. Ubuntu's `apt` "swift" packages are OpenStack Swift. |
+| Available compilers | clang, rustc, node, python3, ruby, java | `command -v` |
 
-### Consequence — the central blocker
+### BLOCKER-1 — no toolchain
 
-> **BLOCKER-1: No Apple toolchain in this environment.**
-> Nothing can be compiled, no test can be executed, no Simulator can be booted, no screenshot can be taken.
-> Every "verified" claim in this project must come from a Mac that the founder controls.
+> Nothing can be compiled, no test can be executed, no simulator can be booted,
+> no screenshot taken. The 130 declared test cases have **never run**.
 
-This is recorded as `BLOCKED` for all compile-, test- and Simulator-dependent criteria in
-`docs/VERIFICATION_LEDGER.md`. It is not a reason to stop producing the code, but it *is* a reason why
-this repository must be treated as **unbuilt source awaiting first compilation**, not a working app.
-
-### What I used instead of a local SDK
-
-The brief said to use locally installed SDK documentation as the source of truth. There is none. The closest
-available substitute is **Apple's live documentation JSON API**, which is reachable from this environment:
-
-- `https://developer.apple.com/tutorials/data/documentation/<path>.json` — per-symbol docs (availability,
-  declaration, discussion, code samples)
-- `https://developer.apple.com/tutorials/data/index/<framework>` — the *complete* symbol index for a framework
-
-I downloaded the full symbol indexes for **SwiftUI (1.38 MB)**, **AVFoundation (1.96 MB)** and
-**UIKit (4.98 MB)**, plus the full **iOS & iPadOS 27 RC release notes (152 KB)** and the framework
-("technologies") list (407 frameworks). Searches below were run against those local copies.
-
-**Evidence class for everything in section 2–3: `DOC-VERIFIED` — present in Apple's official published
-documentation, but not compiler-verified.** That is weaker than compiling against the SDK and much weaker
-than running on hardware. It is, however, considerably stronger than recall, and it is sufficient to
-distinguish a real API from an invented one.
+This is a verification boundary, not a reason to build less. What it does mean:
+**this repository is unbuilt source awaiting first compilation**, and
+`docs/MAC_VALIDATION.md` exists to get it across that line.
 
 ---
 
-## 2. CONFIRMED SDK facts
+## 3. The subject-display API, and why the architecture suits it
 
-### 2.1 iOS 27 and Xcode 27 exist — but only as RC
+The supplied guidance gives PromptCam three things that shaped the design more
+than anything else in the brief.
 
-| Claim in brief | Reality | Evidence |
+**1. The system decides, not the app.** Availability is system-owned and can
+change at any moment. So availability is read *only* from
+`onAvailabilityChange`, never inferred, and never derived from device identity.
+`SubjectDisplayAvailability` has four states rather than a boolean:
+
+| State | Meaning | Director UI |
 |---|---|---|
-| "Xcode 27.1" | **Does not exist.** Latest is **Xcode 27 RC**. Prior line is 26.x (26.0 → 26.6). | Xcode release-notes index lists: Xcode 26, 26.0.1, 26.1.1, 26.2–26.6, **Xcode 27 RC**. No 27.1. |
-| "iOS 27.1 SDK" | **Does not exist.** Latest is **iOS & iPadOS 27 RC**. | iOS release-notes index lists 26 → 26.6, then **iOS & iPadOS 27 RC**. No 27.1. |
-| iOS 27 is real | **CONFIRMED** | SwiftUI "what's new" has a **June 2026** section (ContentBuilder, `reorderable()`, swipe actions, toolbar `visibilityPriority`, document `ReadableDocument`/`WritableDocument`, gesture input kinds). Symbols report `introducedAt: "27.0"`. |
+| `.unsupported` | the platform offers no subject surface | Duo-only controls hidden **entirely** |
+| `.unavailable` | supported, not currently offered | hidden |
+| `.availableNotEnabled` | offered, operator has not switched it on | toggle shown |
+| `.presented` | content is on screen | toggle shown, on |
 
-**Implication:** the deployment target must be chosen against **iOS 27.0**, not 27.1. Any instruction or
-generated code referencing "iOS 27.1" or "Xcode 27.1" is wrong and should be corrected wherever it appears.
+`.unsupported` being distinct from `.unavailable` is what makes "hide Duo-only
+controls cleanly, never show a broken or empty secondary panel" expressible
+rather than aspirational.
 
-### 2.2 `sceneAccessory` — REAL, and the only second-surface API that exists
+**2. Availability requires an active capture session.** This is why the
+"Subject screen" toggle appears only once the camera is running, and it is why
+PromptCam must never keep a camera alive merely to unlock the accessory — that
+would be a privacy abuse and is explicitly forbidden in
+`Sources/PromptCamiOS/Platform/README.md`.
 
-This is the single most important confirmed finding. The brief named `sceneAccessory` and it is genuine.
+**3. The app must tolerate the accessory disappearing.** Losing the subject
+screen never changes recording state. Asserted by
+`AccessoryAvailabilityTests.accessoryDisappearsWhileRecording`.
 
-**SwiftUI surface** (all `iOS 27.0+`, `iPadOS 27.0+`, non-beta):
+### Synchronisation
 
-| Symbol | Declaration |
-|---|---|
-| `View.sceneAccessory(content:)` | `nonisolated func sceneAccessory<C>(@ContentBuilder content: () -> C) -> some View where C : SceneAccessoryContent` |
-| `SceneAccessoryContent` | `@MainActor protocol SceneAccessoryContent` |
-| `ExternalNonInteractiveAccessory<Content>` | `nonisolated struct ExternalNonInteractiveAccessory<Content> where Content : View` |
-| `ExternalNonInteractiveAccessory.init(content:)` | `init(content: () -> Content)` |
-| `ExternalNonInteractiveAccessory.init(isEnabled:content:)` | `init(isEnabled: Binding<Bool>, content: () -> Content)` |
-| `SceneAccessoryContent.onAvailabilityChange(perform:)` | `nonisolated func onAvailabilityChange(perform action: @escaping (Bool) -> Void) -> some SceneAccessoryContent` |
+There is none to get wrong. Both surfaces render from one
+`InterviewSessionEngine`: the director from the engine, the subject from
+`engine.subjectSnapshot()`. One copy of the current question, the countdown, the
+recording state and the duration, so the two surfaces cannot disagree.
 
-**UIKit surface** (equivalent, same release):
+`SubjectSnapshot` has seven fields and none of them can carry an upcoming
+question, the deck name, notes or controls — so the privacy rule is a property
+of the type rather than a thing someone has to remember.
 
-| Symbol | Path |
-|---|---|
-| `UISceneAccessory` | `/documentation/uikit/uisceneaccessory` |
-| `UISceneAccessoryRegistration` (`.isAvailable`, `.isEnabled`) | `/documentation/uikit/uisceneaccessoryregistration` |
-| `UISceneAccessory.externalNonInteractive(sceneConfiguration:)` | + `(sceneConfiguration:userInfo:)` overload |
-| `UIViewController.registerSceneAccessory(_:)` → returns registration | `/documentation/uikit/uiviewcontroller/registersceneaccessory(_:)` |
-| `UIViewController.unregisterSceneAccessory(_:)` | — |
-| `UIScene.ConnectionOptions.sceneAccessoryUserInfo` | — |
+---
 
-**Apple's documented semantics** (quoted from `View.sceneAccessory(content:)` discussion):
+## 4. Layout approach
 
-> "A scene accessory declares supplementary content that the system presents on the app's behalf when an
-> associated piece of system functionality becomes available, for example when an external display is
-> connected. The app declares what content to provide; the system decides when and where to present it.
-> **Scene accessories enhance the app's experience when available, but the app must remain fully functional
-> without them.**"
+Driven entirely by documented capability APIs, with no device detection:
 
-And from `ExternalNonInteractiveAccessory`:
+- `horizontalSizeClass` / `verticalSizeClass` choose side-by-side versus
+  stacked. The open inner display reports regular in both axes, so it gets the
+  side-by-side console with no Duo-specific branch.
+- `GeometryProxy.reservedRegions(kind:)` (`.division`, `.occlusion`) keeps the
+  record button and question navigation off the hinge, via
+  `ReservedRegionSet.largestSafeBand(in:)`.
+- Safe-area insets are never assumed symmetric and never doubled; SwiftUI's own
+  safe-area handling is used, which is the declarative equivalent of
+  `bounds.inset(by: safeAreaInsets)`.
+- `UIScreen.main` is never referenced — enforced by `Scripts/static_review.py`,
+  which fails on it.
+- All three orientations are declared, because the director console must work in
+  landscape. Per the supplied guidance the inner display does not use that
+  configuration for layout decisions.
+- `ArrangementView` is available behind a second flag
+  (`PROMPTCAM_USE_ARRANGEMENT_VIEW`) to trial against the size-class layout. The
+  guidance warns against adopting it for novelty, and the portable layout
+  already works, so it is an evaluation rather than a dependency.
 
-> "A scene accessory that presents non-interactive content on an external display. The scene accessory may be
-> presented when an external display is connected to the device, **or when the device is connected to an
-> external display via AirPlay.**"
+---
 
-**Apple's own canonical code sample** (verbatim from the docs — this is the pattern PromptCam adopts):
+## 5. Camera approach
+
+PromptCam's workflow: **record the subject with a rear camera** while the
+operator works on the inner display and the subject reads prompts on the outer
+display.
+
+The Duo camera additions (`.builtInOuterUltraWideCamera`,
+`.builtInInnerUltraWideCamera`, the virtual front camera) are all
+**front-facing**, and exist for selfie-style capture. They are listed in
+`CameraDirectionAdapter` but deliberately unused: a new front-camera API is not
+a reason to start filming with the front camera.
+
+Device selection uses `AVCaptureDevice.DiscoverySession` and takes what the
+device reports, rather than hardcoding a lens, so an unfamiliar camera layout
+still works.
+
+`AVCaptureDeviceDirectionCoordinator` is **deliberately not implemented** — see
+`docs/ASSUMPTIONS.md` §4. Five simultaneous unknowns in one startup path, and
+the rear camera does not change identity when the device folds. The seam
+exists, returns `false`, and documents the five completion steps.
+
+---
+
+## 6. Answers to the Stage-B validation questions
+
+| # | Question | Answer | Status |
+|---|---|---|---|
+| 1 | Can a third-party camera app show synchronised custom content on the outer display? | **Yes** — that is what `CameraCaptureAccessory` is for, and synchronisation is inherent because both surfaces render from one engine. | SUPPLIED, `REQUIRES_MAC` |
+| 2 | Can the accessory contain a **live camera preview**, or only supplementary content? | **Unverified, and V0 assumes no.** Apple demonstrates teleprompter-like custom content; whether an *independent* live preview is possible, and what it costs, is unverified for this project. Per the brief's "do not fake a preview", V0 ships an honest question-and-status display, and the option is stripped at the engine boundary unless a feature flag marks it verified. | `REQUIRES_MAC`, then `REQUIRES_PHYSICAL_DUO` |
+| 3 | Can the inner-display operator use the intended rear camera configuration? | **Yes** — standard rear capture, unchanged API. | SUPPLIED |
+| 4 | What happens when the device is opened, closed, rotated or partially folded during recording? | Layout adapts through size classes and reserved regions. Fold position is observable via `onHingeChange` but drives no layout. **Whether folding tears down the capture session is the highest-risk unknown in the project** and needs hardware. | `REQUIRES_PHYSICAL_DUO` |
+| 5 | Can the simulator prove the complete experience? | **No.** The Simulator has no camera, so real capture, audio levels and interruptions cannot be exercised there at all. A Duo simulator via Device Hub can prove layout and accessory content; capture needs a device. | `REQUIRES_DUO_SIMULATOR` + physical |
+| 6 | Do App Review rules restrict camera use, recording indicators or external-display behaviour? | Technically enforced and handled: accurate usage strings (absent ones crash on first access), the system recording indicator is never suppressed, and the accessory is non-interactive by construction. The Review Guidelines themselves were not fetched. | `BLOCKED` — a founder task |
+
+---
+
+## 7. Appendix A — reproducing the environment findings
+
+```bash
+command -v xcodebuild xcrun swift swiftc simctl   # expect: nothing
+curl -sS -o /dev/null -w '%{http_code}\n' https://download.swift.org/   # expect: 000 (403 CONNECT)
+python3 Scripts/static_review.py                  # architectural invariants
+```
+
+On a Mac with Xcode 27.1, the authoritative checks — and the ten-second probe
+that settles the accessory question — are in `docs/MAC_VALIDATION.md` steps 1–2.
+
+---
+
+## 8. Appendix B — what this sandbox could and could not see
+
+Scoped narrowly on purpose. **This section is a record of the limits of a Linux
+sandbox, not a finding about the iOS SDK.** Nothing here should be read as
+evidence that an API does or does not exist.
+
+Using Apple's public documentation JSON API, I downloaded the complete symbol
+indexes for SwiftUI (1.38 MB), AVFoundation (1.96 MB) and UIKit (4.98 MB), the
+iOS & iPadOS 27 RC release notes (152 KB), and the list of 407 documented
+frameworks.
+
+**Resolved from here** — declarations and code samples read directly:
 
 ```swift
-struct RootView: View {
-    @State private var isEnabled = false
-    @State private var isAvailable = false
-    @State private var isPresented = false
-    var document: PresentationDocument
+// SwiftUI, iOS 27.0+ / iPadOS 27.0+
+func sceneAccessory<C>(@ContentBuilder content: () -> C) -> some View where C: SceneAccessoryContent
+@MainActor protocol SceneAccessoryContent
+struct ExternalNonInteractiveAccessory<Content> where Content: View
+func onAvailabilityChange(perform: @escaping (Bool) -> Void) -> some SceneAccessoryContent
 
-    var body: some View {
-        PresentationDocumentView(document: document)
-            .toolbar {
-                if isAvailable {
-                    SecondaryDisplayToggle(isEnabled: $isEnabled)
-                    if isPresented {
-                        SecondaryDisplayControls()
-                    }
-                }
-            }
-            .sceneAccessory {
-                ExternalNonInteractiveAccessory(isEnabled: $isEnabled) {
-                    PresentationPreview(document: document)
-                        .onAppear { isPresented = true }
-                        .onDisappear { isPresented = false }
-                }
-                .onAvailabilityChange { newValue in
-                    isAvailable = newValue
-                }
-            }
-    }
-}
+// UIKit equivalents, same release
+class UISceneAccessory,  class UISceneAccessoryRegistration      // .isAvailable, .isEnabled
+UISceneAccessory.externalNonInteractive(sceneConfiguration:)
+UIViewController.registerSceneAccessory(_:) / .unregisterSceneAccessory(_:)
 ```
 
-Note how closely Apple's own example matches PromptCam's need: a **presentation preview shown on a second
-surface while the operator keeps the controls on the primary surface.** That is a strong signal that the
-"director console + subject prompt screen" split is an idiomatic use of this API rather than a fight against it.
-
-**Release-note corroboration** (iOS & iPadOS 27 RC, item 175548901):
-
-> "In apps built with the iOS 27.0 SDK, you can display non-interactive content on external display scenes
-> using the `.sceneAccessory` view modifier with an `ExternalNonInteractiveAccessory` type."
-
-And (UIKit migration note):
-
-> "In apps built with the iOS 27.0 SDK, `windowExternalDisplayNonInteractive` scenes are no longer offered
-> automatically by the system. Use `UIViewController.registerSceneAccessory(_:)` with a
-> `UISceneAccessory.externalNonInteractive` instance to display non-interactive content on external display
-> scenes."
-
-### 2.3 Scene-based lifecycle is now mandatory
-
-From the iOS 27 RC release notes (141837548):
-
-> "Apps built with the latest SDK must adopt the scene-based life cycle or they fail to launch."
-
-A SwiftUI `App` already satisfies this. Recorded so it is not accidentally violated later.
-
-### 2.4 Camera/recording APIs relied upon — all long-established
-
-| Symbol | iOS availability | Note |
-|---|---|---|
-| `AVCaptureVideoPreviewLayer` | 4.0+ | operator preview |
-| `AVCaptureMovieFileOutput` | 4.0+ | file recording + delegate-confirmed completion |
-| `AVCaptureMultiCamSession` | 13.0+ | exists, but **not needed for V0** (see §5) |
-| `AVCaptureDevice.requestAccess(for:)` | 7.0+ | permissions |
-
-No new iOS 27 camera API was found that changes this design.
-
----
-
-## 3. DISPROVEN / NOT FOUND — claims from the brief that do not hold
-
-Searches were run over the **complete** SwiftUI, AVFoundation and UIKit symbol indexes plus the full iOS 27 RC
-release notes. Match counts are literal, case-insensitive.
-
-| Claim in brief | Result | Evidence |
-|---|---|---|
-| `CameraCaptureAccessory` | **NOT FOUND** | 0 matches across all three framework indexes. Not in release notes. |
-| `onHingeChange` | **NOT FOUND** | 0 matches across all three framework indexes. Not in release notes. |
-| "Reserved regions" API | **NOT FOUND** | 0 matches for `reservedRegion` / "reserved region". The only `reserved*` hits in UIKit are unrelated: `UIControl.State.reserved`, `UIControlEventApplicationReserved`, `UICellAccessory.reservedLayoutWidth`. |
-| "Device Hub" | **NOT FOUND** | 0 matches in iOS 27 RC release notes; not among the 407 documented frameworks. |
-| Hinge API of any kind | **NOT FOUND** | `hinge`: 0 in SwiftUI, 0 in AVFoundation, 0 in UIKit (the 2 UIKit "matches" are the substring inside `isPrefetchingEnabled`). 0 in release notes. |
-| Fold / posture / articulation API | **NOT FOUND** | `fold`: 0 symbols in all three indexes; the 3 release-note hits are the word "folder". `posture`, `articulat`, `unfold`, `halfopen`, `booklet`, `crease`, `dual screen`: **0 symbol matches each.** |
-| "iPhone Duo" as a documented device | **NOT FOUND** | 0 mentions in iOS 27 RC release notes. (`duo` matches only `AVCaptureDeviceTypeBuiltInDuoCamera` — the deprecated iPhone 7 Plus dual-lens device type, unrelated to a foldable.) |
-| A foldable-specific framework | **NOT FOUND** | Reviewed all **407** framework names in Apple's technologies index. Nothing foldable-, hinge- or Duo-related. |
-| "Inner and outer camera selection" API | **NOT FOUND** | No new iOS 27 camera-position API. `AVCaptureDevice.Position` remains front/back/unspecified. |
-| "Adaptive size classes" as a new Duo feature | **Already existed** | Size classes, safe areas and `GeometryReader` are long-standing. Nothing Duo-specific was added. |
-| iPhone Duo Simulator | **CANNOT CHECK** | No Simulator installed and no Xcode. Undetermined, not disproven. |
-
-### 3.1 The single most important correction
-
-`sceneAccessory` is real, but the brief's framing of it as *"the iPhone Duo outer-display API"* is **not
-supported by the documentation.** Every Apple sentence about it describes **external displays and AirPlay**.
-There is no documented statement that a foldable's outer display is surfaced through it.
-
-Three explanations are possible, and I cannot distinguish between them from here:
-
-- **(a)** iPhone Duo was announced and its developer APIs are NDA / ship in a later iOS 27.x that is not yet
-  publicly documented. Plausible — today is 2026-09-12, iOS 27 is only at RC, and Apple announcements
-  typically land in September.
-- **(b)** The specific names in the brief (`CameraCaptureAccessory`, `onHingeChange`, reserved regions,
-  Device Hub) came from a rumour, a secondhand summary, or a generated draft, and are not real API names.
-  The fact that `sceneAccessory` is exactly right while the other four are exactly absent points this way.
-- **(c)** The Duo's outer display is exposed to third-party apps **as an external display scene**, reusing
-  `sceneAccessory` rather than adding foldable-specific API. This would be very Apple-like: one abstraction,
-  the system decides placement, apps must work without it.
-
-**I have not verified which is true, and I will not write code or documentation that assumes one.**
-
----
-
-## 4. Architectural decision that follows from the evidence
-
-**Decision: build the subject-facing display on `sceneAccessory` + `ExternalNonInteractiveAccessory`, behind
-a protocol boundary, and never branch on device identity.**
-
-Rationale — this is the right bet under *all three* explanations above:
-
-- If **(c)** is true, PromptCam works on iPhone Duo on day one with no change.
-- If **(a)** is true, the protocol boundary (`SubjectDisplayPresenting`) is the seam where a Duo-specific
-  implementation drops in. The session state, the subject view, the design system and all the tests are reused.
-- If **(b)** is true, nothing was wasted: PromptCam still ships a genuinely differentiated feature — a
-  subject-facing prompt screen on any external display or AirPlay target (a monitor, a TV, an Apple TV in a
-  studio). That is a real, testable, shippable product today, on hardware the founder can already buy.
-
-Consequences that are forced by the evidence, not chosen:
-
-1. **The subject display cannot accept input.** The type is literally `ExternalNonInteractiveAccessory`. No
-   buttons, no taps, no gestures on the subject surface. All control stays with the director. (This happens to
-   be correct product design anyway — the interviewee should not be able to change anything.)
-2. **The system, not the app, decides when the accessory appears.** We must drive everything from
-   `onAvailabilityChange` and `onAppear`/`onDisappear`, never from a device check.
-3. **The app must be fully functional with no accessory.** Apple states this as a requirement. The
-   "ordinary iPhone fallback" is therefore not a nice-to-have; it is the compliant baseline.
-4. **No hinge/fold code will be written.** There is no API. Fold handling reduces to ordinary adaptive layout
-   (size classes, safe areas, `GeometryReader`) which is required regardless and is testable on an iPad or in
-   Split View today. Writing speculative `onHingeChange` code would be inventing an API — forbidden by the brief.
-5. **No string-based device detection**, per the brief, and now also because there is nothing to detect.
-
----
-
-## 5. Answers to the six Stage-B validation questions
-
-| # | Question | Answer | Confidence |
-|---|---|---|---|
-| 1 | Can a third-party camera app show synchronized custom content on the outer display? | **On an external display / AirPlay: yes** — `sceneAccessory` is designed for it and both surfaces render from the same SwiftUI state, so synchronisation is inherent (single source of truth, not message passing). **On a Duo outer display specifically: UNVERIFIED.** | DOC-VERIFIED for external display; ASSUMPTION for Duo |
-| 2 | Can the accessory contain a **live camera preview**, or only supplementary content? | **UNVERIFIED, and V0 assumes NO.** The generic is `Content: View`, so an `AVCaptureVideoPreviewLayer` wrapped in `UIViewRepresentable` is *type-compatible* — but type-compatibility is not proof that the system renders a live capture layer on a non-interactive accessory surface, and there is no documented statement either way. Per the brief's "do not fake a preview", **V0 ships an honest question + status display with no preview**, and the preview is gated behind a feature flag that stays off until verified on hardware. | ASSUMPTION — must be tested on a device |
-| 3 | Can the inner-display operator use the intended rear camera configuration? | **Standard rear capture: yes** (`AVCaptureDevice.Position.back`, unchanged API). **Whether a Duo exposes additional/different rear cameras when open vs. closed: UNVERIFIED.** V0 uses `AVCaptureDevice.DiscoverySession` and takes what the device reports, rather than hardcoding a lens. | DOC-VERIFIED for ordinary rear capture |
-| 4 | What happens when the device is opened, closed, rotated or partially folded during recording? | **UNKNOWN — no API exists to observe it, so it cannot be handled explicitly.** What I *can* do defensively, and do: treat it as an ordinary scene-geometry change (layout must survive arbitrary resize), and treat accessory loss as a first-class event via `onAvailabilityChange(false)` / `onDisappear` **without ending the recording**. Also handle `AVCaptureSession` interruption notifications, which is where a hardware reconfiguration would most plausibly surface. | ASSUMPTION — highest-risk unknown in the project |
-| 5 | Can the Simulator prove the complete experience? | **No.** Two independent reasons: (i) the Simulator has **no camera**, so real capture, real mic levels and real interruption behaviour cannot be exercised there at all; (ii) no Duo Simulator has been confirmed to exist. A physical device is required for capture, and a physical iPhone Duo would be required for any Duo claim. | Reasoned from (i) documented Simulator limitation, (ii) unverifiable |
-| 6 | Do App Review rules restrict camera use, recording indicators or external-display behaviour? | **Partially answered; needs founder review of current guidelines.** What is *technically* enforced and confirmed: accurate `NSCameraUsageDescription` / `NSMicrophoneUsageDescription` are mandatory or the app crashes on first access; the system recording indicator cannot be suppressed; `ExternalNonInteractiveAccessory` cannot present interactive controls by construction. The App Store Review Guidelines themselves were not fetched and are outside what I can verify from here. | Partially DOC-VERIFIED; guidelines review is a founder task |
-
----
-
-## 6. Assumption register (things that must be validated on hardware)
-
-| ID | Assumption | Risk if wrong | How to falsify |
-|---|---|---|---|
-| A1 | iPhone Duo's outer display is offered to third-party apps as a scene accessory | Core wedge does not work on Duo; product degrades to "external display prompter" | Run on a physical iPhone Duo; observe `onAvailabilityChange` |
-| A2 | A live camera preview can render on a non-interactive accessory | "Optional mirrored preview" is impossible; question-only display is final | Enable the flag on a device with an external display and observe |
-| A3 | The accessory keeps presenting while `AVCaptureSession` is running | Subject screen blanks mid-interview | Physical device + external display, record for 5 min |
-| A4 | Fold/open during recording does not tear down the capture session | Recording lost at the worst moment | Physical iPhone Duo only |
-| A5 | An iPhone Duo Simulator exists in some Xcode 27.x | UAT cases 6, 12 are permanently blocked without hardware | `xcrun simctl list devicetypes` on a Mac with Xcode 27 |
-| A6 | iOS 27.0 is an acceptable floor for the Duo path | If Duo ships on a later 27.x, availability gates need raising | Check Duo's shipping iOS version |
-
----
-
-## 7. What this report does NOT claim
-
-- It does **not** claim the code compiles. It has never been compiled.
-- It does **not** claim any iPhone Duo behaviour was observed.
-- It does **not** claim `sceneAccessory` was called successfully. It was read, not run.
-- It does **not** claim the App Store Review Guidelines were reviewed.
-- Documentation presence proves an API **exists**; it does not prove our **usage** of it is correct.
-
----
-
-## 8. Reproducing this reconnaissance
-
-Run on any machine with network access to `developer.apple.com`:
-
-```bash
-# Full symbol index for a framework
-curl -s "https://developer.apple.com/tutorials/data/index/swiftui" -o idx_swiftui.json
-grep -o -i '"title":"[^"]*hinge[^"]*"' idx_swiftui.json | sort -u   # expect: no output
-
-# A single symbol's availability + declaration + code samples
-curl -s "https://developer.apple.com/tutorials/data/documentation/swiftui/externalnoninteractiveaccessory.json" | jq '.metadata.platforms'
-
-# iOS 27 RC release notes
-curl -s "https://developer.apple.com/tutorials/data/documentation/ios-ipados-release-notes/ios-ipados-27-release-notes.json" -o rn27.json
-grep -c -i hinge rn27.json    # expect: 0
-```
-
-On a Mac with Xcode 27, the authoritative checks are:
-
-```bash
-xcodebuild -version
-xcodebuild -showsdks | grep -i ios
-xcrun simctl list devicetypes | grep -i -E 'duo|fold'
-echo 'import SwiftUI; @available(iOS 27, *) func p(_ b: Binding<Bool>) -> some SceneAccessoryContent { ExternalNonInteractiveAccessory(isEnabled: b) { Text("x") } }' > /tmp/p.swift
-xcrun swiftc -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" -target arm64-apple-ios27.0 -typecheck /tmp/p.swift
-```
-
-That last command is the first thing to run on a Mac: it turns §2.2 from `DOC-VERIFIED` into
-`COMPILE-VERIFIED` in about ten seconds.
-
----
-
-## 9. Addendum — reconciliation with the supplied Apple guidance
-
-Added after §1–8. The product owner supplied Apple's iPhone Duo developer
-guidance, naming APIs that my documentation searches did not find.
-
-### 9.1 What changed
-
-| Item | §3 said | Supplied guidance says | PromptCam now |
-|---|---|---|---|
-| `CameraCaptureAccessory` | not found | the camera-application scene accessory | **Used**, in `DuoSubjectAccessory.swift`, behind `PROMPTCAM_DUO` |
-| `onHingeChange` | not found | real, with `(previous, current)` and `hinge.status` / `hinge.angle` | Wired in `DuoHingeObserver.swift`, off by default |
-| Reserved regions | not found | `GeometryProxy.reservedRegions(kind:)`, `.division` / `.occlusion` | Used in `DuoReservedRegionLayout.swift` to keep controls off the hinge |
-| `ArrangementView` | not found | real, `.split` / `.overlay` | Behind a second flag; size-class layout is the default, per the guidance's own warning against novelty adoption |
-| Duo camera types + `AVCaptureDeviceDirectionCoordinator` | not found | real | Types listed; the coordinator is **deliberately not implemented** (see §9.4) |
-| Xcode 27.1 / iOS 27.1 | do not exist in published docs | Xcode 27.1 adds Duo support via Device Hub | Build SDK is 27.1; deployment target 26.0 |
-| Device Hub | not found | how Duo simulators are created | UAT 6 and 12 depend on it |
-
-### 9.2 What did NOT change
-
-Section 3's searches were real and are reproducible with the commands in §8.
-Across the complete SwiftUI, AVFoundation and UIKit symbol indexes, the iOS 27
-RC release notes, and all 407 documented frameworks, none of the Duo-specific
-symbols appeared, and the newest published versions were Xcode 27 RC and
-iOS 27 RC.
-
-The reconciliation I consider most likely: **the Duo APIs are newer than the
-public documentation archive I could reach** — a device announced around now,
-with its SDK arriving in 27.1. That is consistent with the supplied guidance and
-requires no one to be wrong.
-
-But it leaves one hard fact untouched: **I could not confirm a single
-Duo-specific signature.** None of them may be treated as known-correct, and the
-first Mac session must verify each one. `docs/APPLE_API_CORRECTIONS.md` has the
-20 questions pre-filled.
-
-### 9.3 What the supplied guidance improved
-
-Two things it told me that my searches could not, and which changed the design:
-
-1. **Accessory availability requires the app to be full-screen on the inner
-   display *and* to have an active camera-capture session**, with the system
-   owning availability and able to revoke it at any time. This is why
-   `SubjectDisplayAvailability` has four states rather than a boolean, why the
-   "Subject screen" toggle appears only once the camera is running, and why
-   losing the accessory never touches recording state.
-2. **The outer display behaves like a compact iPhone environment, and the open
-   inner display reports regular size classes in both axes.** That is what makes
-   a plain size-class layout correct, and it is why no foldable-specific layout
-   API was needed.
-
-It also confirmed my §4 decision to build the subject surface on
-`sceneAccessory` behind a protocol seam: `CameraCaptureAccessory` is used
-through the same `sceneAccessory` / `onAvailabilityChange` pattern I had already
-designed against, so adopting it changed one file.
-
-### 9.4 One supplied snippet deliberately not used
-
-`AVCaptureDeviceDirectionCoordinator(view:deviceTypes:changeHandler:)` is not
-implemented. Not scepticism — arithmetic. It carries five simultaneous unknowns
-(type name, three initialiser labels, the handler's parameter type, which the
-guidance calls "a map" without naming, and its actor isolation). Put in the
-app's startup path, a wrong label fails the build and a wrong handler type may
-compile and silently never fire.
-
-PromptCam records the subject with a **rear** camera, which does not change
-identity when the device folds, so nothing in V0 needs it. The seam exists,
-returns `false`, and documents the five unknowns and five completion steps.
-
-### 9.5 The fallback that stays on the record
-
-`ExternalNonInteractiveAccessory` (iOS 27.0) is the one second-surface type
-whose declaration I read directly, with Apple's own code samples. It uses the
-identical `sceneAccessory` / `onAvailabilityChange` shape, so if
-`CameraCaptureAccessory` does not resolve on a Mac, switching to it is a
-one-line change already documented in `DuoSubjectAccessory.swift`.
-
-It also carries a product consequence worth more than its fallback value:
-because it is documented for **external displays and AirPlay**, the
-subject-display experience may be testable today on a TV or an Apple TV — no
-foldable required. See `docs/HUMAN_SUMMARY.md`.
+Apple's documented semantics for `sceneAccessory` — "the app declares what
+content to provide; the system decides when and where to present it… the app
+must remain fully functional without them" — match the supplied constraints for
+`CameraCaptureAccessory`, and the `onAvailabilityChange` shape is identical. The
+architecture was designed against that shape and needed no change to adopt the
+camera accessory.
+
+**Did not resolve from here:** `CameraCaptureAccessory`, `onHingeChange`,
+`UIHingeInteraction`, `reservedRegions`, `ArrangementView`,
+`AVCaptureDeviceDirectionCoordinator`, the Duo camera device types, "Device
+Hub", and any 27.1 release note. A re-probe on 2026-09-12 returned 404 for each
+while the control symbol returned 200.
+
+**How to read that:** this sandbox reaches one public documentation archive,
+with no Apple toolchain, no developer authentication and no access to
+Xcode-bundled documentation — which is where current SDK documentation actually
+lives. Absence from what I could reach says nothing about the SDK. The operative
+consequence is narrow and unchanged:
+
+> **No Duo-specific signature has been confirmed by a compiler**, so none may be
+> treated as known-correct until a Mac says so.
+
+That is why all of them are isolated in five files, behind a flag, off in the
+default configuration, with 20 pre-filled questions in
+`docs/APPLE_API_CORRECTIONS.md`.
+
+**One useful by-product.** `ExternalNonInteractiveAccessory` is documented for
+external displays and AirPlay. If it behaves as documented, the subject-display
+experience may be testable today on a TV or an Apple TV, which would let the
+core product idea be validated without waiting for Duo hardware. It is also the
+obvious fallback if `CameraCaptureAccessory` needs correcting, since the
+surrounding pattern is the same.

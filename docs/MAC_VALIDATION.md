@@ -92,20 +92,25 @@ spec rather than hand-building a `.xcodeproj`.
 
 ## Step 4 — Select your development team
 
-Xcode → target **PromptCam** → **Signing & Capabilities** → **Team**.
+Edit `Support/Signing.xcconfig` and set `DEVELOPMENT_TEAM` to your 10-character
+Team ID (Xcode ▸ Settings ▸ Accounts). Then `xcodegen generate` again.
 
-`DEVELOPMENT_TEAM` is deliberately blank in `project.yml`; a committed team
-identifier would break every other developer's build. Set it in Xcode, or add it
-to `project.yml` locally without committing.
+It ships empty on purpose — a committed team identifier breaks every other
+developer's build. To keep your edit out of git:
+
+```bash
+git update-index --skip-worktree Support/Signing.xcconfig
+```
+
+You can also just pick the team in Xcode ▸ target **PromptCam** ▸
+**Signing & Capabilities**.
 
 ## Step 5 — Check the bundle identifier
 
-Default: `com.example.promptcam.PromptCam`.
-
-Change it to your own reverse-DNS identifier before any device build or TestFlight
-upload. Update both `options.bundleIdPrefix` and
-`targets.PromptCam.settings.base.PRODUCT_BUNDLE_IDENTIFIER`, then re-run
-`xcodegen generate`.
+Also in `Support/Signing.xcconfig`. The default,
+`com.example.promptcam.PromptCam`, is a placeholder that **cannot be registered
+with Apple** — change it to your own reverse-DNS identifier before any device
+build or TestFlight upload, then re-run `xcodegen generate`.
 
 ## Step 6 — Build for an ordinary iPhone simulator
 
@@ -152,18 +157,19 @@ section D. **Do not mark anything `VERIFIED` that the test run did not cover.**
 
 ## Step 8 — Enable the Duo code paths
 
-In `project.yml`:
+No editing required. Select the **PromptCam (Duo)** scheme in Xcode, or:
 
-```yaml
-targets:
-  PromptCam:
-    settings:
-      configs:
-        Debug:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG PROMPTCAM_DUO
+```bash
+xcodebuild -project PromptCam.xcodeproj -scheme 'PromptCam (Duo)' \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -configuration Duo build
 ```
 
-Then `xcodegen generate` and build again. Everything that breaks now is in
+The `Duo` configuration is Debug plus `PROMPTCAM_DUO`. The plain **PromptCam**
+scheme stays Duo-free, so you can always fall back to a known-good baseline
+while resolving an API signature.
+
+Everything that breaks now is in
 `Sources/PromptCamiOS/Platform/` by design. Work through the five files:
 
 | File | Confirm |

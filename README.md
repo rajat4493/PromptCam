@@ -25,8 +25,9 @@ build. Expect compiler errors on the first attempt — especially in
 unconfirmed Apple API in one place.
 
 **Start here:** [`docs/MAC_VALIDATION.md`](docs/MAC_VALIDATION.md)
-**Non-technical overview:** [`docs/HUMAN_SUMMARY.md`](docs/HUMAN_SUMMARY.md)
-**What is actually proven:** [`docs/VERIFICATION_LEDGER.md`](docs/VERIFICATION_LEDGER.md)
+**Delivery ledger:** [`duck/`](duck/) — intent, assumptions, scope changes, verification, learning
+**Non-technical overview:** [`duck/HUMAN_SUMMARY.md`](duck/HUMAN_SUMMARY.md)
+**What is actually proven:** [`duck/VERIFICATION.md`](duck/VERIFICATION.md)
 
 ---
 
@@ -74,16 +75,18 @@ xcodegen generate
 open PromptCam.xcodeproj
 ```
 
-Then set your development team in **Signing & Capabilities**, change the bundle
-identifier from `com.example.promptcam.PromptCam`, choose a simulator and press
-⌘R.
+Set your team ID and bundle identifier in `Support/Signing.xcconfig` (the
+default bundle identifier is a placeholder that cannot be registered), then
+choose a simulator and press ⌘R.
 
 ### 4. Enable the iPhone Duo code paths
 
-The Duo paths are **off by default**, so an unconfirmed API signature cannot
-block the baseline build or the test run. Once steps 1–3 are clean, add
-`PROMPTCAM_DUO` to `SWIFT_ACTIVE_COMPILATION_CONDITIONS` in `project.yml` and
-regenerate. See [`Sources/PromptCamiOS/Platform/README.md`](Sources/PromptCamiOS/Platform/README.md).
+Select the **PromptCam (Duo)** scheme, which builds the `Duo` configuration
+(Debug + `PROMPTCAM_DUO`).
+
+The plain **PromptCam** scheme stays Duo-free, so an unconfirmed API signature
+can never block the baseline build or the test run — get that green first. See
+[`Sources/PromptCamiOS/Platform/README.md`](Sources/PromptCamiOS/Platform/README.md).
 
 ---
 
@@ -101,13 +104,16 @@ PromptCamiOS    — SwiftUI, AVFoundation, SwiftData.
                   behind the PROMPTCAM_DUO flag.
 ```
 
-Two rules do most of the work:
+Three rules do most of the work:
 
 - **`.saved` has exactly one inbound edge**, and it originates in
   AVFoundation's own "recording finished" callback. The app cannot structurally
   claim an interview was saved before the operating system confirmed the file.
 - **The subject's screen renders from a type that cannot hold director data.**
   Upcoming questions and operator controls have nowhere to leak to.
+- **Anything worth keeping leaves the swept directory.** `Captures/` is cleaned
+  up; `Recordings/` and `Recovery/` never are. A file the app promises to keep
+  is moved to `Recovery/` and offered back through an in-app Recover action.
 
 Both surfaces read from one `InterviewSessionEngine`, so they cannot disagree
 about the current question, the countdown, the recording state or the duration.
@@ -151,6 +157,7 @@ recording fails, the app keeps the video and tells you where it is.
 
 | Document | What it is for |
 |---|---|
+| [`duck/`](duck/) | **The delivery ledger.** Milestones, intent, scope changes, verification |
 | [`HUMAN_SUMMARY.md`](docs/HUMAN_SUMMARY.md) | Plain-English status. **Read first** |
 | [`MAC_VALIDATION.md`](docs/MAC_VALIDATION.md) | 20-step first-build handover |
 | [`VERIFICATION_LEDGER.md`](docs/VERIFICATION_LEDGER.md) | What is proven, at which tier |
