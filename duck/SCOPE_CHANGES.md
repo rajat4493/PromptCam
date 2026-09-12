@@ -22,7 +22,7 @@ multiple themes. **Nothing on the exclusion list was added.**
 | SC-2 | SwiftData moved out of Core into the iOS layer; Core uses value types | Core must import no platform framework, so it stays testable without an Apple SDK | Product owner (override) |
 | SC-3 | Repository protocols changed from synchronous to `async` | SwiftData's `ModelContext` is main-actor-bound; forcing it through a synchronous protocol required an `assumeIsolated` that crashes if the assumption is ever wrong | Claude (implementation correctness) |
 | SC-4 | Subject display switched from `ExternalNonInteractiveAccessory` to `CameraCaptureAccessory` | Supplied guidance names the camera-app accessory. Same `sceneAccessory`/`onAvailabilityChange` shape, so the seam was unchanged | Product owner (supplied guidance) |
-| SC-5 | All unverified Duo API isolated behind `PROMPTCAM_DUO`, **off in Debug and Release** | One wrong signature must not block the baseline build or the test run | Claude, endorsed by override ("centralize uncertain APIs") |
+| SC-5 | All unverified Duo API isolated behind `PROMPTCAM_DUO`; ordinary Debug/Release remain Duo-free | One wrong signature must not block fallback verification | Claude, endorsed by override ("centralize uncertain APIs") |
 | SC-6 | Added a `Duo` build configuration and a "PromptCam (Duo)" scheme | Review finding: with the flag absent from both configurations, the committed app was an ordinary single-screen camera app | Product owner (review) |
 | SC-7 | `AVCaptureDeviceDirectionCoordinator` deliberately not implemented | Five simultaneous unknowns in a startup path; the rear-camera workflow does not need it. Override explicitly permits a documented placeholder | Claude, per override §6 |
 | SC-8 | Live subject preview flag-gated and off | Brief forbids faking a preview; capability unverified | Brief + Claude |
@@ -35,6 +35,9 @@ multiple themes. **Nothing on the exclusion list was added.**
 | SC-15 | `hasSeededSample` flag persisted | Review: seeding on "is the database empty?" resurrected a deliberately deleted sample deck | Product owner (review) |
 | SC-16 | `docs/SDK_CAPABILITY_REPORT.md` rewritten | Review: its executive summary asserted that real APIs do not exist — dangerous context for a future coding agent | Product owner (review) |
 | SC-17 | This `/duck` ledger created | Review: TheDuck rules require the milestone ledger under `/duck`, not only long-form docs under `/docs` | Product owner (review) |
+| SC-18 | Logical session termination separated from physical file reconciliation; bounded finalisation watchdog added | Follow-up review: a runtime error or startup timeout could precede the authoritative file callback | Codex follow-up review |
+| SC-19 | Added `DuoRelease` and made the Duo scheme archive with it | Follow-up review: the development scheme enabled Duo, but its default Release archive compiled the feature out | Codex follow-up review |
+| SC-20 | Added an iOS unit-test target with five scripted orchestration tests | Core tests could not exercise `DirectorSessionModel` or asynchronous event ordering | Codex follow-up review |
 
 ## Proposed and rejected
 

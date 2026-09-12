@@ -40,11 +40,11 @@ final class AppEnvironment {
 
     /// One interview, with the capture pipeline it owns.
     ///
-    /// `CaptureService.events` is a single-consumer `AsyncStream`, and
-    /// `tearDown()` finishes that stream — so a service cannot be reused across
-    /// takes, and two session models sharing one service would compete for the
-    /// same events. Each session therefore gets its own pipeline, and hands
-    /// back its own `AVCaptureSession` for the preview layer.
+    /// `CaptureService.events` is a single-consumer `AsyncStream`, so two
+    /// session models sharing one service would compete for the same events.
+    /// Each presented interview therefore gets its own pipeline and hands back
+    /// its own `AVCaptureSession` for the preview layer. Multiple takes within
+    /// that presented interview deliberately reuse the same owner and stream.
     struct PreparedSession: Identifiable {
         let id = UUID()
         let model: DirectorSessionModel

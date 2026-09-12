@@ -15,7 +15,7 @@ iOS SDK and no Swift toolchain** (the Swift download hosts were blocked by
 network policy). Consequently:
 
 - **No file here has ever been compiled.**
-- The **112 automated test cases have never been executed.**
+- The **130 Core and 5 iOS orchestration test cases have never been executed.**
 - `project.yml` has never been run through XcodeGen.
 - Nothing has run on a simulator or a device.
 
@@ -84,6 +84,10 @@ choose a simulator and press ⌘R.
 Select the **PromptCam (Duo)** scheme, which builds the `Duo` configuration
 (Debug + `PROMPTCAM_DUO`).
 
+Its Archive action uses `DuoRelease`, so an App Store archive retains the Duo
+feature with release optimisation. The ordinary `Release` configuration remains
+available for fallback verification.
+
 The plain **PromptCam** scheme stays Duo-free, so an unconfirmed API signature
 can never block the baseline build or the test run — get that green first. See
 [`Sources/PromptCamiOS/Platform/README.md`](Sources/PromptCamiOS/Platform/README.md).
@@ -111,9 +115,10 @@ Three rules do most of the work:
   claim an interview was saved before the operating system confirmed the file.
 - **The subject's screen renders from a type that cannot hold director data.**
   Upcoming questions and operator controls have nowhere to leak to.
-- **Anything worth keeping leaves the swept directory.** `Captures/` is cleaned
-  up; `Recordings/` and `Recovery/` never are. A file the app promises to keep
-  is moved to `Recovery/` and offered back through an in-app Recover action.
+- **Anything worth keeping is protected from the sweeper.** Finalised recovery
+  files move to `Recovery/`. If AVFoundation never supplies a final callback,
+  the database-referenced fallback path remains in `Captures/` and cleanup is
+  required to exclude it. Both are offered through the in-app Recover action.
 
 Both surfaces read from one `InterviewSessionEngine`, so they cannot disagree
 about the current question, the countdown, the recording state or the duration.

@@ -143,7 +143,7 @@ its tests run without a simulator:
 swift test
 ```
 
-Expect 112 test cases across 6 files, **none of which has ever been executed**.
+Expect 130 Core test cases, **none of which has ever been executed**.
 Anticipate:
 
 - Swift Testing availability — the tests `import Testing`. If your toolchain
@@ -154,6 +154,18 @@ Anticipate:
 Once green, record the pass count in `VERIFICATION_LEDGER.md` — replacing
 `STATICALLY_REVIEWED` with the real result for rows S1, S3–S8, S10, S12 and
 section D. **Do not mark anything `VERIFIED` that the test run did not cover.**
+
+Then run the five orchestration tests against the generated iOS project:
+
+```bash
+xcodebuild -project PromptCam.xcodeproj -scheme PromptCam \
+  -destination 'platform=iOS Simulator,name=iPhone 17' test
+```
+
+These cover timeout followed by delayed start, runtime error followed by file
+completion, duplicate completion, interruption without completion, and
+pre-start timestamp suppression. They are the direct evidence for the lifecycle
+fixes; the Core suite alone is not.
 
 ## Step 8 — Enable the Duo code paths
 
@@ -168,6 +180,13 @@ xcodebuild -project PromptCam.xcodeproj -scheme 'PromptCam (Duo)' \
 The `Duo` configuration is Debug plus `PROMPTCAM_DUO`. The plain **PromptCam**
 scheme stays Duo-free, so you can always fall back to a known-good baseline
 while resolving an API signature.
+
+Before distribution, confirm the Duo archive also carries the flag:
+
+```bash
+xcodebuild -project PromptCam.xcodeproj -scheme 'PromptCam (Duo)' \
+  -configuration DuoRelease archive
+```
 
 Everything that breaks now is in
 `Sources/PromptCamiOS/Platform/` by design. Work through the five files:

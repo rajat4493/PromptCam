@@ -206,7 +206,7 @@ struct CaptureFailureTests {
 @Suite("Interruption and backgrounding")
 struct InterruptionTests {
 
-    @Test("An interrupted recording is flagged, and its partial file is preserved")
+    @Test("An interrupted recording is flagged without exposing an open file")
     func interruptionPreservesPartialFile() throws {
         let clock = ManualSessionClock()
         var engine = try InterviewSessionEngine.recording(
@@ -223,7 +223,7 @@ struct InterruptionTests {
         #expect(result?.outcome.isPlayable == false)
         #expect(result?.duration == 18)
         // Never silently deleted.
-        #expect(result?.preservedFilePath == "/tmp/partial.mov")
+        #expect(result?.preservedFilePath == nil)
     }
 
     @Test("Backgrounding during recording is an interruption, not a save")

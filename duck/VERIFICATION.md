@@ -38,8 +38,9 @@ under egress policy.
 | Brackets balance across all Swift files | balanced |
 | No source file asserts VERIFIED or production-ready | 0 claims |
 
-Current counts: Core 15 files / 1,827 lines; iOS 25 files / 4,235 lines; Tests
-7 files / 2,317 lines; **130 declared test cases, 0 executed.**
+Current counts after the Codex continuation: **130 Core tests plus 5 iOS
+orchestration tests, 0 executed.** Exact file/line counts come from the latest
+`python3 Scripts/static_review.py` run and are not treated as product evidence.
 
 The script proves *structure*. It is not a compiler and proves nothing about
 whether the code runs.
@@ -61,13 +62,16 @@ Two properties hold by construction rather than by discipline:
 | Severity | Defect | Fix | Regression test |
 |---|---|---|---|
 | P0 | A preserved recording was deleted by the next session's cleanup | Persistent `Recovery/` directory; cleanup narrowed to old, unreferenced files | `PreservedFileSurvivesCleanupTests` (6) |
-| P0 | An interruption plus a late completion callback orphaned the video | One idempotent finalisation path; reconcile instead of confirming; stable identity + upsert | `LateFileReconciliationTests` (6) |
+| P0 | An interruption plus a late completion callback orphaned the video | Logical termination and physical file reconciliation are tracked separately; reconcile instead of confirming; stable identity + upsert | `LateFileReconciliationTests` (6) + iOS orchestration tests (unexecuted) |
 | P0 | Stop could race capture startup and strand `.finishing` | Stop queued until `.recordingStarted`; service-level guard; 8 s watchdog | `StopDuringStartupTests` (4) |
-| P1 | Duo feature compiled out of both configurations | `Duo` configuration + scheme | n/a (build config) |
+| P1 | Duo feature absent from a shipping archive | `Duo` development configuration plus `DuoRelease`; Duo scheme archives with `DuoRelease` | n/a (`REQUIRES_MAC`) |
 | P1 | `Double(hinge.angle)` — no such initialiser for `Angle` | `hinge.angle.degrees` | n/a (`REQUIRES_MAC`) |
 | P1 | "Video has been kept" was not actionable | In-app Recover share action, existence-checked | n/a (UI) |
 | P1 | Capture-event ownership unsafe across sessions | Per-session capture service; `captureTask` cleared | `SessionReuseTests` (2) |
 | — | A deleted sample deck reappeared | Persisted `hasSeededSample` flag | existing seed test |
+| P0 follow-up | Startup timeout changed UI state but did not stop a delayed physical capture | Timeout now requests Stop; service and orchestrator queue an early Stop; bounded finalisation watchdog tears down | `timeoutThenDelayedStart` (`REQUIRES_MAC`) |
+| P0 follow-up | Runtime error consumed the one-shot finalisation guard before `didFinishRecording` | New non-final `runtimeError` event; only terminal file callbacks set `hasReconciledFile` | `runtimeErrorThenCompletion` (`REQUIRES_MAC`) |
+| P1 follow-up | Marker/question timestamps could precede the first media byte | Markers disabled and pre-start question changes excluded from timeline until `recordingStarted` | `noPreStartTimestamps` (`REQUIRES_MAC`) |
 
 Two further defects were caught earlier by the static review itself: a callback
 named `onAvailabilityChange` that shadowed Apple's modifier, and an unset

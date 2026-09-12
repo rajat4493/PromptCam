@@ -29,9 +29,10 @@ import PromptCamCore
 ///    reconciliation point: it never claims a save for a session that already
 ///    ended, it moves the file somewhere persistent, and it updates the library
 ///    row the session already wrote.
-/// 3. **A second finalisation.** `hasFinalised` makes every path after the
-///    first a no-op, so a failure followed by a completion (or two completions)
-///    cannot double-file or double-persist.
+/// 3. **A second finalisation.** `hasReconciledFile` deduplicates physical file
+///    callbacks without confusing an earlier runtime error with file
+///    completion. A runtime error ends the logical session, but the later file
+///    callback must still be accepted and reconciled.
 @MainActor
 @Observable
 final class DirectorSessionModel {
@@ -60,15 +61,16 @@ final class DirectorSessionModel {
     // MARK: - Dependencies
 
     private let captureService: any CaptureService
-    private let store: RecordingFileStore
+    private let store: any RecordingStore
     private let recordings: any RecordingRepository
     private let clock: any SessionClock
-    private let permissions: AVPermissionService
+    private let permissions: any PermissionService
 
     private var captureTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
     private var tickerTask: Task<Void, Never>?
     private var startupWatchdogTask: Task<Void, Never>?
+    private var finalisationWatchdogTask: Task<Void, Never>?
 
     // MARK: - Capture lifecycle flags
 
@@ -76,20 +78,26 @@ final class DirectorSessionModel {
     private var hasCaptureStarted = false
     /// True when the operator asked to stop before capture was confirmed.
     private var stopRequestedBeforeStart = false
-    /// Guards `finalise` so it runs exactly once per take.
-    private var hasFinalised = false
+    /// True only after the physical capture file has produced its terminal
+    /// callback. A runtime error does not set this: AVFoundation may still
+    /// finish a recoverable file afterwards.
+    private var hasReconciledFile = false
     /// The capture in flight, so the sweeper can be told to leave it alone.
     private var activeTemporaryPath: String?
 
     /// The countdown length. Three seconds is long enough for the subject to
     /// look up and short enough not to feel like waiting.
-    private let countdownSeconds = 3
+    private let countdownSeconds: Int
 
     /// How long to wait for `didStartRecording` before giving up.
     ///
     /// Without this, a capture that never starts leaves the session stuck in
     /// `.finishing` with no way out and no explanation.
-    private let captureStartTimeout: Duration = .seconds(8)
+    private let captureStartTimeout: Duration
+    /// Time allowed for AVFoundation to answer a requested stop with a terminal
+    /// file callback. On expiry the session is torn down and any surviving path
+    /// is recorded without moving a potentially open file.
+    private let captureFinalisationTimeout: Duration
 
     init(
         deckName: String,
@@ -98,10 +106,13 @@ final class DirectorSessionModel {
         capabilities: DeviceCapabilities,
         flags: FeatureFlags,
         captureService: any CaptureService,
-        store: RecordingFileStore,
+        store: any RecordingStore,
         recordings: any RecordingRepository,
-        permissions: AVPermissionService,
-        clock: any SessionClock = SystemSessionClock()
+        permissions: any PermissionService,
+        clock: any SessionClock = SystemSessionClock(),
+        countdownSeconds: Int = 3,
+        captureStartTimeout: Duration = .seconds(8),
+        captureFinalisationTimeout: Duration = .seconds(8)
     ) {
         self.engine = InterviewSessionEngine(
             deckName: deckName,
@@ -116,6 +127,9 @@ final class DirectorSessionModel {
         self.recordings = recordings
         self.permissions = permissions
         self.clock = clock
+        self.countdownSeconds = countdownSeconds
+        self.captureStartTimeout = captureStartTimeout
+        self.captureFinalisationTimeout = captureFinalisationTimeout
     }
 
     // MARK: - Derived view state
@@ -142,7 +156,10 @@ final class DirectorSessionModel {
     /// Stop stays available during the pre-start window — the request is queued
     /// rather than dropped, so the button must not be disabled there.
     var canStopRecording: Bool { engine.canApply(.stop) }
-    var canAddMarker: Bool { state.isCapturing }
+    /// A state-machine `.recording` begins at the button press, slightly before
+    /// AVFoundation confirms the first byte. Timestamped actions stay disabled
+    /// until that confirmation so no event can point before the media begins.
+    var canAddMarker: Bool { hasCaptureStarted && state.isCapturing }
 
     /// A warning to show before rolling, rather than an interruption during.
     var foldWarning: String? {
@@ -157,12 +174,19 @@ final class DirectorSessionModel {
         // Sweep only captures that are old AND not in use. This used to delete
         // every file in the capture directory, which destroyed the very
         // recordings the app had promised to keep.
+        var protectedPaths = Set(activeTemporaryPath.map { [$0] } ?? [])
+        if let existing = try? await recordings.loadRecordings() {
+            protectedPaths.formUnion(existing.compactMap(\.preservedFilePath))
+        }
         try? store.cleanUpAbandonedTemporaryFiles(
-            excluding: activeTemporaryPath.map { [$0] } ?? [],
+            excluding: protectedPaths,
             olderThan: RecordingFileStore.abandonedCaptureAge
         )
 
-        let snapshot = await permissions.snapshot()
+        let snapshot = PermissionSnapshot(
+            camera: await permissions.status(for: .camera),
+            microphone: await permissions.status(for: .microphone)
+        )
         guard snapshot.canRecord else {
             // Enter `.preparing` first so the failure is a legal transition and
             // the UI has a specific cause to explain.
@@ -192,6 +216,7 @@ final class DirectorSessionModel {
         countdownTask?.cancel(); countdownTask = nil
         tickerTask?.cancel(); tickerTask = nil
         startupWatchdogTask?.cancel(); startupWatchdogTask = nil
+        finalisationWatchdogTask?.cancel(); finalisationWatchdogTask = nil
 
         await captureService.tearDown()
 
@@ -231,6 +256,7 @@ final class DirectorSessionModel {
             stopRequestedBeforeStart = true
             return
         }
+        startFinalisationWatchdog()
         Task { await captureService.stopRecording() }
     }
 
@@ -241,12 +267,13 @@ final class DirectorSessionModel {
     }
 
     func addMarker() {
+        guard canAddMarker else { return }
         _ = engine.addMarker(at: clock.now)
     }
 
-    func nextQuestionTapped() { engine.goToNextQuestion(at: clock.now) }
-    func previousQuestionTapped() { engine.goToPreviousQuestion(at: clock.now) }
-    func selectQuestion(at index: Int) { engine.goToQuestion(index, at: clock.now) }
+    func nextQuestionTapped() { navigate(to: engine.currentQuestionIndex + 1) }
+    func previousQuestionTapped() { navigate(to: engine.currentQuestionIndex - 1) }
+    func selectQuestion(at index: Int) { navigate(to: index) }
     func updateDisplayOptions(_ options: SubjectDisplayOptions) { engine.updateDisplayOptions(options) }
     func dismissAlert() { alert = nil }
 
@@ -255,8 +282,9 @@ final class DirectorSessionModel {
         completedRecording = nil
         hasCaptureStarted = false
         stopRequestedBeforeStart = false
-        hasFinalised = false
+        hasReconciledFile = false
         activeTemporaryPath = nil
+        finalisationWatchdogTask?.cancel(); finalisationWatchdogTask = nil
         try? engine.reset()
         await begin()
     }
@@ -336,7 +364,7 @@ final class DirectorSessionModel {
 
         hasCaptureStarted = false
         stopRequestedBeforeStart = false
-        hasFinalised = false
+        hasReconciledFile = false
         activeTemporaryPath = temporaryPath
 
         startTicker()
@@ -357,7 +385,7 @@ final class DirectorSessionModel {
             guard let self, !self.hasCaptureStarted else { return }
             guard self.state.isCapturing || self.state == .finishing else { return }
 
-            self.applyFailure(
+            await self.failActiveCapture(
                 .captureFailed("The camera did not start recording. Nothing was captured.")
             )
         }
@@ -408,6 +436,7 @@ final class DirectorSessionModel {
                 // it now that there is actually something to stop.
                 stopRequestedBeforeStart = false
                 await captureService.stopRecording()
+                startFinalisationWatchdog()
             }
 
         case .recordingFinished(let path, let duration):
@@ -415,6 +444,9 @@ final class DirectorSessionModel {
 
         case .recordingFailed(let failure):
             await finaliseFailure(failure)
+
+        case .runtimeError(let failure):
+            await failActiveCapture(failure)
 
         case .interrupted(let reason):
             await applyInterruption(reason)
@@ -438,11 +470,12 @@ final class DirectorSessionModel {
 
     /// The operating system finalised a file.
     private func finalise(temporaryPath: String, duration: TimeInterval) async {
-        guard !hasFinalised else { return }
-        hasFinalised = true
+        guard !hasReconciledFile else { return }
+        hasReconciledFile = true
 
         tickerTask?.cancel()
         startupWatchdogTask?.cancel()
+        finalisationWatchdogTask?.cancel()
 
         switch engine.state {
         case .finishing:
@@ -466,11 +499,12 @@ final class DirectorSessionModel {
 
     /// Capture ended without producing a usable file.
     private func finaliseFailure(_ failure: RecordingFailure) async {
-        guard !hasFinalised else { return }
-        hasFinalised = true
+        guard !hasReconciledFile else { return }
+        hasReconciledFile = true
 
         tickerTask?.cancel()
         startupWatchdogTask?.cancel()
+        finalisationWatchdogTask?.cancel()
 
         // Whatever partial file exists belongs to the operator. Move it out of
         // the sweeper's reach before reporting.
@@ -490,6 +524,55 @@ final class DirectorSessionModel {
             offersSettings: false
         )
         await persistResult()
+    }
+
+    /// Ends the logical session after a runtime/startup failure while leaving
+    /// the physical file lifecycle open for its authoritative delegate event.
+    private func failActiveCapture(_ failure: RecordingFailure) async {
+        guard engine.canApply(.fail(failure)) else { return }
+        tickerTask?.cancel()
+        countdownTask?.cancel()
+        startupWatchdogTask?.cancel()
+
+        let hadCapturePath = activeTemporaryPath != nil
+        try? engine.fail(failure, duration: engine.duration(now: clock.now))
+        alert = SessionAlert(
+            title: "Recording problem",
+            message: failure.operatorMessage
+                + (hadCapturePath ? " PromptCam is finalising any video captured so far." : ""),
+            offersSettings: false
+        )
+        await persistResult()
+
+        guard hadCapturePath else { return }
+        // Works whether capture already started or is still in the start-up
+        // window; the platform service queues an early stop itself.
+        stopRequestedBeforeStart = !hasCaptureStarted
+        await captureService.stopRecording()
+        startFinalisationWatchdog()
+    }
+
+    private func startFinalisationWatchdog() {
+        finalisationWatchdogTask?.cancel()
+        finalisationWatchdogTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.captureFinalisationTimeout)
+            if Task.isCancelled || self.hasReconciledFile { return }
+
+            // Stop the session before exposing a fallback path. We deliberately
+            // do not move it: a delayed delegate callback may still arrive with
+            // the authoritative final file and will then move/reconcile it.
+            await self.captureService.tearDown()
+            guard let path = self.activeTemporaryPath else { return }
+            // Record the expected path even if the filesystem has not exposed
+            // it yet. The recovery UI independently checks existence, while the
+            // cleanup pass must protect this path if it appears after teardown.
+            _ = self.engine.attachRecoveredFile(
+                path: path,
+                duration: self.engine.duration(now: self.clock.now)
+            )
+            await self.persistResult()
+        }
     }
 
     /// Moves a confirmed capture into permanent storage, then — and only then —
@@ -580,7 +663,8 @@ final class DirectorSessionModel {
 
         alert = SessionAlert(
             title: "Recording interrupted",
-            message: reason.operatorMessage + " Any video captured so far has been kept.",
+            message: reason.operatorMessage
+                + (wasCapturing ? " PromptCam is finalising any video captured so far." : ""),
             offersSettings: false
         )
         await persistResult()
@@ -591,7 +675,19 @@ final class DirectorSessionModel {
             // routes it to `reconcileLateFile` — which preserves the file and
             // updates this row rather than claiming a save.
             await captureService.stopRecording()
+            startFinalisationWatchdog()
         }
+    }
+
+    /// Question navigation remains responsive while the camera starts, but a
+    /// pre-start change is not written into the media timeline. Once the first
+    /// byte exists, the engine records the change normally.
+    private func navigate(to index: Int) {
+        if state.isCapturing, !hasCaptureStarted {
+            _ = engine.goToQuestion(index, at: clock.now, recordTimeline: false)
+            return
+        }
+        _ = engine.goToQuestion(index, at: clock.now)
     }
 
     /// Writes the outcome to the library.

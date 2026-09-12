@@ -151,7 +151,7 @@ reported rather than worked around, so no attempt was made to route around it.
 
 **Consequences, stated plainly:**
 
-- `swift build` and `swift test` have **never been run**. The 112 declared test
+- `swift build` and `swift test` have **never been run**. The 130 Core and 5 iOS orchestration test
   cases in `Tests/PromptCamCoreTests` have never executed. They are
   `STATICALLY_REVIEWED`, not passing.
 - No SwiftUI or AVFoundation file has been type-checked.

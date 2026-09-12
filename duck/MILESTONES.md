@@ -20,7 +20,7 @@ boundary not crossed. M1 cannot close while nothing has been compiled.
 | 8 | Marker storage and export | ⬜ `STATICALLY_REVIEWED` |
 | 9 | Failure handling, no false success, no silent deletion | ⬜ `STATICALLY_REVIEWED` (regression-tested, unexecuted) |
 | 10 | Accessibility and adaptive layout | ⬜ `REQUIRES_MAC` |
-| 11 | Automated tests for all 23 required areas | ⬜ 130 cases written, **0 executed** |
+| 11 | Automated tests for all 23 required areas | ⬜ 130 Core + 5 iOS orchestration cases written, **0 executed** |
 | 12 | Manual UAT document | ✅ 17 cases, `docs/UAT.md` |
 | 13 | Verification ledger | ✅ `docs/VERIFICATION_LEDGER.md` + `VERIFICATION.md` |
 | 14 | Human summary and engineering handover | ✅ |
@@ -30,6 +30,7 @@ boundary not crossed. M1 cannot close while nothing has been compiled.
 | Date | Reviewer | Verdict | Outcome |
 |---|---|---|---|
 | 2026-09-12 | Product owner | Strong architecture, honest docs, **do not start founder testing** — 3 P0 recording-safety defects, headline feature disabled | All 3 P0s and 4 P1s fixed in `973fbcc`; 18 regression tests added; SDK report rewritten; this ledger created |
+| 2026-09-12 | Codex follow-up | M1 remains open — runtime-error/file completion conflated, startup watchdog did not stop capture, Duo archive omitted flag, pre-start timestamps possible | Lifecycle facts separated; bounded stop/finalisation added; `DuoRelease`; 5 iOS orchestration tests added; awaiting Mac execution |
 
 ### What closes M1
 

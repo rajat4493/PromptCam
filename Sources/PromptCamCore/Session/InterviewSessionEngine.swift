@@ -277,12 +277,16 @@ public struct InterviewSessionEngine: Sendable {
     ///
     /// Returns `false` when the index is out of range, leaving state untouched.
     @discardableResult
-    public mutating func goToQuestion(_ index: Int, at now: Date) -> Bool {
+    public mutating func goToQuestion(
+        _ index: Int,
+        at now: Date,
+        recordTimeline: Bool = true
+    ) -> Bool {
         guard questions.indices.contains(index) else { return false }
         guard index != currentQuestionIndex else { return false }
         currentQuestionIndex = index
         questionRevision += 1
-        if state.isCapturing, let start = captureStartedAt {
+        if recordTimeline, state.isCapturing, let start = captureStartedAt {
             questionChanges.append(
                 QuestionChangeModel(
                     offset: max(0, now.timeIntervalSince(start)),
@@ -407,9 +411,11 @@ public struct InterviewSessionEngine: Sendable {
         case .interrupted(let reason):
             outcome = .interrupted
             failureDescription = reason.operatorMessage
-            // A partial file is kept, never deleted, so the operator can try to
-            // salvage the take.
-            preservedPath = temporaryCapturePath
+            // Do not expose the in-flight path yet. An interruption ends the
+            // logical session before AVFoundation necessarily closes the file;
+            // the platform layer attaches a path only after completion or its
+            // bounded teardown fallback.
+            preservedPath = nil
         default:
             return nil
         }

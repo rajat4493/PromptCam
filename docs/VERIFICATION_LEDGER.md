@@ -53,7 +53,7 @@ been compiled. Read the whole table before describing this app to anyone.
 ## B. Architectural invariants — executed here
 
 Command: `python3 Scripts/static_review.py` → **PASSED**
-(47 Swift files: Core 15/1827 lines, iOS 25/4235 lines, Tests 7/2319 lines; **130** declared test cases)
+(Core and iOS source plus two test layers; **130 Core + 5 iOS orchestration** test cases)
 
 | # | Requirement | Verification method | Evidence | Result | Remaining limitation |
 |---|---|---|---|---|---|
@@ -124,7 +124,7 @@ All 23 areas the brief requires. Every row is `STATICALLY_REVIEWED` and
 | 22 | Deterministic clock available | `ManualSessionClock` + all timing tests | — |
 | 23 | Test doubles for camera, audio, storage, accessory | `TestDoubles.swift` | 7 doubles |
 
-**112 declared `@Test` cases across 6 files. Zero executed.**
+**130 Core and 5 iOS orchestration `@Test` cases. Zero executed.**
 
 ---
 
@@ -137,7 +137,10 @@ every other test here.
 | # | Defect | Fix | Regression test | Result |
 |---|---|---|---|---|
 | R1 | `cleanUpAbandonedTemporaryFiles()` deleted **every** file in the capture directory, and `begin()` called it unconditionally — so a "preserved" recording was destroyed by the next take. "Kept" was not true. | Persistent `Recovery/` directory the sweeper cannot reach; `preserveForRecovery(temporaryPath:)`; cleanup narrowed to files both older than one hour **and** absent from `excluding:` | `PreservedFileSurvivesCleanupTests` (6 cases, incl. a sweep with `olderThan: 0` that must not touch a preserved file) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
-| R2 | An interruption persisted a terminal outcome, then AVFoundation's later completion callback attempted `store` + `confirmSaved`; `.interrupted → .saveConfirmed` was rejected *after* the file had moved, orphaning it | One idempotent `finalise` guarded by `hasFinalised`, switching on engine state; an already-terminal session reconciles via `attachRecoveredFile` instead of confirming. `attachRecoveredFile` refuses on a saved or in-flight session. Stable `SessionResultSnapshot.identifier` + repository upsert | `LateFileReconciliationTests` (6 cases, incl. one asserting reconciliation yields **one** row) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R2 | An interruption persisted a terminal outcome, then AVFoundation's later completion callback attempted `store` + `confirmSaved`; `.interrupted → .saveConfirmed` was rejected *after* the file had moved, orphaning it | Logical outcome and physical file reconciliation separated; only terminal file callbacks set `hasReconciledFile`. An already-terminal session reconciles via `attachRecoveredFile`; stable identifier + repository upsert prevents duplicates | Core reconciliation tests + iOS scripted lifecycle tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R8 | Startup watchdog could fail the UI while a delayed physical capture later began and ran without a stop | Watchdog now requests Stop, early stop is queued at both layers, and a bounded finalisation watchdog tears the session down | `timeoutThenDelayedStart` | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R9 | Runtime error consumed finalisation guard before the authoritative file callback | Runtime error is explicitly non-final; later success/failure callback remains accepted | `runtimeErrorThenCompletion` | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R10 | Duo development build had no equivalent shipping archive configuration | `DuoRelease` defines `PROMPTCAM_DUO`; Duo scheme Archive action selects it | Inspect generated scheme and archive build settings | `REQUIRES_MAC` |
 | R3 | Stop could run while `movieOutput.isRecording == false`, so `stopRecording()` did nothing and the session sat in `.finishing` forever | Stop queued until `.recordingStarted` and honoured on arrival; the same guard added inside `AVFoundationCaptureService`; 8-second startup watchdog fails the session with an explanation | `StopDuringStartupTests` (4 cases, incl. `.finishing` accepting a failure so the watchdog has an escape hatch) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | R4 | `end()` cancelled `captureTask` but never cleared it, so a later `begin()` silently refused to resubscribe; one single-consumer `AsyncStream` was shared across session models | `captureTask` cleared; capture service created per session via `AppEnvironment.PreparedSession`, which also returns its own `AVCaptureSession` for the preview | `SessionReuseTests` (2 cases) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | R5 | The Duo feature was compiled out of both configurations, so the committed app was an ordinary single-screen camera app | `Duo` build configuration and **PromptCam (Duo)** scheme | n/a — build configuration | `REQUIRES_MAC` |

@@ -27,6 +27,13 @@ import PromptCamCore
 struct RecordingFileStore: RecordingStore {
 
     private let fileManager = FileManager.default
+    private let baseDirectoryOverride: URL?
+
+    /// Production uses Application Support. Tests inject an isolated root so
+    /// they exercise this implementation without touching app data.
+    init(baseDirectory: URL? = nil) {
+        self.baseDirectoryOverride = baseDirectory
+    }
 
     /// How old a temporary capture must be before the sweeper may remove it.
     ///
@@ -38,6 +45,7 @@ struct RecordingFileStore: RecordingStore {
     /// `Application Support/PromptCam` — outside Documents so interviews are not
     /// exposed to file sharing by accident.
     private var baseDirectory: URL {
+        if let baseDirectoryOverride { return baseDirectoryOverride }
         let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
         return support.appendingPathComponent("PromptCam", isDirectory: true)

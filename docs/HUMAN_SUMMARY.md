@@ -15,7 +15,7 @@ PromptCam is designed to turn a single iPhone into both a camera and an
 interview producer: you get the camera controls and your question list, the
 person you're interviewing gets the current question on a second screen. The
 complete app has been **written** — roughly 5,600 lines of Swift across 45
-files, plus 112 automated tests. **None of it has been compiled or run**,
+files, plus 130 Core and 5 iOS orchestration tests. **None of it has been compiled or run**,
 because the machine I worked on was a Linux server with no Mac, no Xcode, and
 no way to install Swift (the download servers were blocked by network policy).
 So the right way to think about this repository is: a finished, carefully
@@ -128,7 +128,8 @@ building anything else.
 | Blocked | What it needs |
 |---|---|
 | Compiling anything at all | A Mac with Xcode 27.1 |
-| Running the 112 tests | A Mac (or any machine with Swift installed) |
+| Running the 130 Core tests | A Mac (or any machine with Swift installed) |
+| Running the 5 orchestration tests | A Mac with the generated iOS project |
 | Recording an actual video | A physical iPhone — the simulator has no camera |
 | Anything about iPhone Duo | An iPhone Duo simulator, then a real iPhone Duo |
 | Confirming the Duo API names | A Mac with the iOS 27.1 SDK |

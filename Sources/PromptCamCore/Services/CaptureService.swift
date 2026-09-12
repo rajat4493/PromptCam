@@ -13,6 +13,11 @@ public enum CaptureEvent: Equatable, Sendable {
     case recordingFinished(path: String, duration: TimeInterval)
     /// Capture stopped without producing a usable file.
     case recordingFailed(RecordingFailure)
+    /// The capture session reported a runtime problem while a file may still be
+    /// open. This is not a file-finalisation event: the platform must still be
+    /// asked to stop, and a later `recordingFinished`/`recordingFailed` callback
+    /// remains authoritative about the file.
+    case runtimeError(RecordingFailure)
     /// The system interrupted capture.
     case interrupted(InterruptionReason)
     /// The interruption ended and capture could be resumed.

@@ -25,18 +25,18 @@ and the only origin of that event is AVFoundation's `didFinishRecordingTo`
 callback. If you add another route into `.saved`, you have removed the
 guarantee that the app never lies about saving an interview.
 
-**2. There is one finalisation path, and it is idempotent.**
-`DirectorSessionModel.finalise` is guarded by `hasFinalised` and switches on
-engine state. A file that arrives *after* the session ended is reconciled — the
-file is preserved and attached to the existing library row — never confirmed as
-a save. This is what fixes the interruption-orphan defect; do not add a second
-path that stores or confirms.
+**2. Logical termination is not physical file finalisation.**
+`DirectorSessionModel` may persist a failed/interrupted outcome before
+AVFoundation closes the file. Only terminal file callbacks set
+`hasReconciledFile`; a runtime error must leave the later callback available.
+A file arriving after the session ended is attached for recovery, never
+confirmed as a successful save.
 
-**3. Files worth keeping leave the capture directory.** `Captures/` is swept
-(old, unreferenced files only). `Recordings/` and `Recovery/` never are.
-Anything the app promises to keep must be moved into `Recovery/` via
-`preserveForRecovery`, or the next session's cleanup will be entitled to delete
-it — which is exactly the bug that review found.
+**3. Files worth keeping are unreachable by cleanup.** A finalised partial file
+moves to `Recovery/`. If the platform never produces a terminal callback, the
+bounded watchdog tears capture down and records the surviving `Captures/` path;
+future cleanup loads those database references and excludes them. Never expose
+or move an in-flight path before teardown.
 
 ## State ownership
 
@@ -73,9 +73,9 @@ python3 Scripts/static_review.py    # Architectural invariants
 xcodegen generate                   # Never yet run — expect to fix the spec
 ```
 
-Schemes: **PromptCam** (baseline, Duo-free) and **PromptCam (Duo)**. Get the
-baseline green *first*; the ordering exists so one wrong Duo signature cannot
-block validating the rest of the app.
+Schemes: **PromptCam** (baseline, Duo-free) and **PromptCam (Duo)**. The latter
+runs `Duo` and archives `DuoRelease`; both define `PROMPTCAM_DUO`. Get the
+baseline green first.
 
 ## Known limitations
 

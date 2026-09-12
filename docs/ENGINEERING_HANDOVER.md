@@ -29,7 +29,8 @@ PromptCam/
 │       ├── SubjectDisplay/       SubjectPromptView
 │       ├── Decks/ RecordingSetup/ Recordings/ Permissions/ DesignSystem/
 │       └── App/                  Entry point, RootView, AppEnvironment
-└── Tests/PromptCamCoreTests/     112 cases, 7 test doubles
+├── Tests/PromptCamCoreTests/     130 platform-independent cases
+└── Tests/PromptCamiOSTests/      5 orchestration cases (`REQUIRES_MAC`)
 ```
 
 **Why the split is this strict.** `PromptCamCore` compiles and tests with no
@@ -188,7 +189,7 @@ supported, so a spurious callback cannot light up controls that cannot work.
 - No incomplete file is presented as valid. `RecordingOutcome.isPlayable` is
   the sole playback gate, and `playbackURL` additionally requires the file to
   exist.
-- **One idempotent finalisation path.** `finalise` is guarded by `hasFinalised`
+- **One idempotent file-reconciliation path.** `finalise` is guarded by `hasReconciledFile`
   and switches on engine state; a file arriving after the session ended is
   reconciled, never confirmed as a save. `attachRecoveredFile` refuses to run
   on a saved or in-flight session, so it cannot become a route to a false save.
@@ -203,7 +204,7 @@ supported, so a spurious callback cannot light up controls that cannot work.
 
 ## 8. Test strategy
 
-112 `@Test` cases in 6 files, Swift Testing. **Never executed** (no toolchain).
+130 Core plus 5 iOS orchestration `@Test` cases, Swift Testing. **Never executed** (no toolchain).
 
 Seven test doubles: `FakeCaptureService`, `FakePermissionService`,
 `InMemoryDeckRepository`, `InMemoryRecordingRepository`, `TestRecordingStore`
@@ -256,7 +257,7 @@ device detection, bracket balance, and absence of false verification claims.
 | Build SDK | iOS 27.1 (Xcode 27.1) | Toolchain |
 | Device family | iPhone + iPad (`1,2`) | `project.yml` |
 | Orientations | Portrait + both landscapes | `project.yml` |
-| Configurations | `Debug`, `Duo`, `Release` | `project.yml` |
+| Configurations | `Debug`, `Duo`, `DuoRelease`, `Release` | `project.yml` |
 | Schemes | **PromptCam** (baseline) and **PromptCam (Duo)** | `project.yml` |
 | `PROMPTCAM_DUO` | set in the `Duo` configuration only | `SWIFT_ACTIVE_COMPILATION_CONDITIONS` |
 | `PROMPTCAM_USE_ARRANGEMENT_VIEW` | off | Same, additionally requires `PROMPTCAM_DUO` |

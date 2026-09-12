@@ -324,7 +324,7 @@ final class AVFoundationCaptureService: NSObject, CaptureService, @unchecked Sen
     @objc private func sessionRuntimeError(_ notification: Notification) {
         let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
         continuation.yield(
-            .recordingFailed(.captureFailed(error?.localizedDescription ?? "The camera reported an error."))
+            .runtimeError(.captureFailed(error?.localizedDescription ?? "The camera reported an error."))
         )
     }
 
