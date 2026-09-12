@@ -66,7 +66,7 @@ handler type is wrong it may compile and silently never fire, which is worse
 than a build error. **What worked:** not implementing it, returning `false`,
 and documenting the five unknowns and five completion steps.
 
-**2. Claiming the tests pass.** 112 test cases exist. Zero have run. The
+**2. Claiming the tests pass.** 130 Core and 5 iOS orchestration test cases exist. Zero have run. The
 sentence "tests written and passing" would have been a lie a founder could not
 detect. **What worked:** a scoreboard at the top of the ledger, and a script
 that fails if any source file asserts `VERIFIED`.

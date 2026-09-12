@@ -42,8 +42,14 @@ under egress policy.
 | Brackets balance across all Swift files | balanced |
 | No source file asserts VERIFIED or production-ready | 0 claims |
 
-Current counts: Core 16 files / 2,418 lines; iOS 25 files / 3,963 lines; Tests
-8 files / 2,913 lines; **155 declared test cases, 0 executed.**
+Current counts: Core 16 files / 2,437 lines; iOS 25 files / 3,975 lines; Tests
+9 files / 3,174 lines; **165 declared test cases, 0 executed** — 157 runnable
+under `swift test`, 8 requiring Xcode.
+
+Two further fixes were adopted from a parallel solution to the same review
+(`90e09c3`, merged as SC-23): an interruption no longer exposes the in-flight
+capture path until the file is final, and the sweeper now also protects every
+path an existing library row references.
 
 The script proves *structure*. It is not a compiler and proves nothing about
 whether the code runs.

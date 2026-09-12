@@ -122,8 +122,21 @@ public final class InterviewSessionCoordinator {
     /// `permissions` is resolved by the caller, which owns the platform
     /// privacy APIs; passing the resolved snapshot in keeps this testable.
     public func begin(permissions: PermissionSnapshot) async {
+        // Protect both the capture in flight and every path an existing library
+        // row still points at. A recorded `preservedFilePath` is a promise the
+        // file is recoverable; the sweeper must not be able to break it, even
+        // for a file old enough to look abandoned. (Library protection adopted
+        // from the parallel fix in 90e09c3.)
+        var protectedPaths = Set(activeTemporaryPath.map { [$0] } ?? [])
+        if let existing = try? await recordings.loadRecordings() {
+            for recording in existing {
+                if let preserved = recording.preservedFilePath {
+                    protectedPaths.insert(preserved)
+                }
+            }
+        }
         try? store.cleanUpAbandonedTemporaryFiles(
-            excluding: activeTemporaryPath.map { [$0] } ?? [],
+            excluding: protectedPaths,
             olderThan: 3600
         )
 

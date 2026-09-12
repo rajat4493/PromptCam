@@ -206,7 +206,7 @@ struct CaptureFailureTests {
 @Suite("Interruption and backgrounding")
 struct InterruptionTests {
 
-    @Test("An interrupted recording is flagged, and its partial file is preserved")
+    @Test("An interrupted recording is flagged without exposing an open file")
     func interruptionPreservesPartialFile() throws {
         let clock = ManualSessionClock()
         var engine = try InterviewSessionEngine.recording(
@@ -222,8 +222,16 @@ struct InterruptionTests {
         #expect(result?.outcome == .interrupted)
         #expect(result?.outcome.isPlayable == false)
         #expect(result?.duration == 18)
-        // Never silently deleted.
-        #expect(result?.preservedFilePath == "/tmp/partial.mov")
+        // The capture may still be open, so no Recover action may be offered
+        // yet — a recorded path is a promise the file is ready to hand over.
+        #expect(result?.preservedFilePath == nil)
+
+        // Once the platform has finished with it, it becomes recoverable, and
+        // the outcome still is not a save.
+        engine.attachRecoveredFile(path: "/recovery/kept.mov", duration: 18)
+        #expect(engine.resultSnapshot()?.preservedFilePath == "/recovery/kept.mov")
+        #expect(engine.resultSnapshot()?.outcome == .interrupted)
+        #expect(engine.state.hasConfirmedSavedFile == false)
     }
 
     @Test("Backgrounding during recording is an interruption, not a save")

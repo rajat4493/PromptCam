@@ -68,7 +68,7 @@ final class DirectorSessionModel {
 
     private let coordinator: InterviewSessionCoordinator
     private let captureService: any CaptureService
-    private let permissions: AVPermissionService
+    private let permissions: any PermissionService
 
     private var captureTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
@@ -91,7 +91,7 @@ final class DirectorSessionModel {
         captureService: any CaptureService,
         store: any RecordingStore,
         recordings: any RecordingRepository,
-        permissions: AVPermissionService,
+        permissions: any PermissionService,
         clock: any SessionClock = SystemSessionClock()
     ) {
         self.flags = flags
@@ -115,7 +115,11 @@ final class DirectorSessionModel {
 
     func begin() async {
         startConsumingCaptureEvents()
-        await coordinator.begin(permissions: await permissions.snapshot())
+        let snapshot = PermissionSnapshot(
+            camera: await permissions.status(for: .camera),
+            microphone: await permissions.status(for: .microphone)
+        )
+        await coordinator.begin(permissions: snapshot)
         refresh()
     }
 

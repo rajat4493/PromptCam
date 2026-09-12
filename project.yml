@@ -29,17 +29,12 @@ options:
   groupSortPosition: top
   defaultConfig: Debug
 
-# Three configurations. `Duo` exists so the iPhone Duo code paths can be built
-# and run without editing the project: it is Debug plus the PROMPTCAM_DUO
-# compilation condition. Debug and Release stay Duo-free so the baseline build
-# and the test run can never be blocked by an unconfirmed Duo API signature.
+# Four configurations. `Duo` is the development build and `DuoRelease` is the
+# archive build for the differentiated product; both enable PROMPTCAM_DUO.
+# Ordinary Debug/Release remain available for fallback verification.
 configs:
   Debug: debug
   Duo: debug
-  # Production-equivalent Duo build. Exists because a Duo scheme that only ever
-  # builds a Debug-like configuration cannot be archived: Archive defaults to
-  # the release configuration, which would silently ship WITHOUT the Duo code
-  # paths — an App Store build missing the headline feature.
   DuoRelease: release
   Release: release
 
@@ -128,11 +123,22 @@ targets:
           # Add PROMPTCAM_USE_ARRANGEMENT_VIEW to also trial ArrangementView.
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG PROMPTCAM_DUO
         DuoRelease:
-          # What actually ships once the Duo APIs are validated. Optimised like
-          # Release, but with the Duo code paths compiled in.
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: PROMPTCAM_DUO
         Release:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+
+  PromptCamiOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/PromptCamiOSTests
+    dependencies:
+      - target: PromptCam
+      - package: PromptCamCore
+        product: PromptCamCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   # Baseline: ordinary iPhone behaviour, no Duo symbols referenced at all.
@@ -144,27 +150,20 @@ schemes:
       config: Debug
     test:
       config: Debug
-      # PromptCamCore's tests are run through Swift Package Manager
-      # (`swift test`), not through this scheme, so they stay runnable without
-      # a Simulator. See README.md.
-      targets: []
+      targets:
+        - PromptCamiOSTests
 
   # iPhone Duo: the differentiated experience. Select this scheme to build the
   # subject-facing accessory, reserved-region layout and hinge observation.
-  #
-  # Archive is pinned to DuoRelease. Without that pin, archiving this scheme
-  # would produce a Release build with PROMPTCAM_DUO undefined — an App Store
-  # submission missing the entire Duo feature, with nothing to indicate it.
-  # Verify after archiving: the build log must show -DPROMPTCAM_DUO.
   PromptCam (Duo):
     build:
       targets:
         PromptCam: all
     run:
       config: Duo
-    profile:
-      config: DuoRelease
-    analyze:
+    test:
       config: Duo
+      targets:
+        - PromptCamiOSTests
     archive:
       config: DuoRelease

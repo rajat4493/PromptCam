@@ -443,9 +443,15 @@ public struct InterviewSessionEngine: Sendable {
         case .interrupted(let reason):
             outcome = .interrupted
             failureDescription = reason.operatorMessage
-            // A partial file is kept, never deleted, so the operator can try to
-            // salvage the take.
-            preservedPath = temporaryCapturePath
+            // Deliberately does NOT expose the in-flight capture path.
+            //
+            // An interruption ends the logical session before the platform has
+            // necessarily closed the file, so publishing that path here would
+            // offer the operator a Recover action for something still being
+            // written. The path is attached by `attachRecoveredFile` once the
+            // completion callback arrives, or after the coordinator's bounded
+            // finalisation backstop. Adopted from the parallel fix in 90e09c3.
+            preservedPath = nil
         default:
             return nil
         }

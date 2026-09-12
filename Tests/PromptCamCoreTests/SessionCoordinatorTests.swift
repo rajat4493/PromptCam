@@ -423,6 +423,48 @@ struct TimelineGatingTests {
     }
 }
 
+@Suite("Orchestration: the sweeper cannot break a recovery promise")
+@MainActor
+struct CleanupProtectionTests {
+
+    @Test("A path an existing library row points at is never swept")
+    func libraryReferencedPathIsProtected() async throws {
+        let h = Harness()
+
+        // A previous session left a recoverable file, recorded in the library.
+        let orphan = try h.store.makeTemporaryPath()
+        try h.store.writeFakeCapture(at: orphan)
+        try h.store.backdate(path: orphan, by: 7200)
+        try await h.recordings.save(
+            InterviewRecordingModel(
+                deckName: "Earlier interview",
+                startedAt: Date(timeIntervalSince1970: 1),
+                duration: 20,
+                outcome: .interrupted,
+                preservedFilePath: orphan
+            )
+        )
+
+        // Starting a new session sweeps abandoned captures.
+        await h.coordinator.begin(permissions: .bothAuthorized)
+
+        #expect(FileManager.default.fileExists(atPath: orphan),
+                "A recorded preservedFilePath is a promise the sweeper must not break")
+    }
+
+    @Test("A genuinely orphaned capture is still swept")
+    func unreferencedOldCaptureIsSwept() async throws {
+        let h = Harness()
+        let abandoned = try h.store.makeTemporaryPath()
+        try h.store.writeFakeCapture(at: abandoned)
+        try h.store.backdate(path: abandoned, by: 7200)
+
+        await h.coordinator.begin(permissions: .bothAuthorized)
+
+        #expect(FileManager.default.fileExists(atPath: abandoned) == false)
+    }
+}
+
 @Suite("Orchestration: permissions and the happy path")
 @MainActor
 struct CoordinatorHappyPathTests {

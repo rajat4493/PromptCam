@@ -20,7 +20,7 @@ boundary not crossed. M1 cannot close while nothing has been compiled.
 | 8 | Marker storage and export | ⬜ `STATICALLY_REVIEWED` |
 | 9 | Failure handling, no false success, no silent deletion | ⬜ `STATICALLY_REVIEWED` (regression-tested, unexecuted) |
 | 10 | Accessibility and adaptive layout | ⬜ `REQUIRES_MAC` |
-| 11 | Automated tests for all 23 required areas | ⬜ 155 cases written, **0 executed** |
+| 11 | Automated tests for all 23 required areas | ⬜ 165 cases written, **0 executed** |
 | 12 | Manual UAT document | ✅ 17 cases, `docs/UAT.md` |
 | 13 | Verification ledger | ✅ `docs/VERIFICATION_LEDGER.md` + `VERIFICATION.md` |
 | 14 | Human summary and engineering handover | ✅ |

@@ -40,6 +40,23 @@ multiple themes. **Nothing on the exclusion list was added.**
 | SC-20 | `DuoRelease` configuration; Duo scheme's Archive and Profile actions pinned to it | Archive defaults to Release, so archiving the Duo scheme would have shipped an App Store build with the headline feature compiled out, silently | Product owner (review) |
 | SC-21 | No timeline event is recorded until capture is confirmed; the opening question is written at offset zero on confirmation | Markers and question changes taken during start-up pointed at no file and were invalidated by the rebase. Gating is simpler and more truthful than rebasing pending events | Product owner (review) |
 | SC-22 | Bounded `finalisationTimedOut` backstop | Reconciliation must stay open after a failure, but not forever — otherwise a completion callback that never arrives means the file is swept and lost | Claude, per review guidance |
+| SC-23 | **Merged a parallel fix (`90e09c3`) for the same five findings.** Kept this branch's Core-coordinator architecture; adopted two fixes from the parallel work and its iOS unit-test target | Two agents addressed the round-2 review independently. Details below | Claude (merge), reconciling both |
+
+## The parallel-fix merge (SC-23)
+
+`90e09c3` fixed the same five findings on the same branch, at the same time.
+The two solutions converged on `CaptureEvent.runtimeError` and on a
+`DuoRelease` configuration pinned to the Duo scheme's Archive action, and
+diverged on where orchestration should live.
+
+| Area | This branch | `90e09c3` | Merged outcome |
+|---|---|---|---|
+| Orchestration | moved into `PromptCamCore` as `InterviewSessionCoordinator` | stayed in `DirectorSessionModel` | **Core coordinator kept.** It makes the orchestration tests runnable under `swift test` with no Xcode, which matters because the review's point was that the orchestration was untestable |
+| Orchestration tests | 27 cases in `PromptCamCoreTests` | 5 cases in a new `PromptCamiOSTests` Xcode target | **Both kept, re-scoped.** All five parallel scenarios were already covered in Core; the iOS target now tests what the wrapper alone owns — mirroring, event consumption, teardown |
+| Interruption's preserved path | exposed `temporaryCapturePath` immediately | set to `nil` until the file is final | **Theirs adopted.** It caught a real hole here: exposing an in-flight path offers a Recover action for a file that may still be open |
+| Sweeper protection | skipped the in-flight capture only | also skipped every path an existing library row references | **Theirs adopted.** A recorded `preservedFilePath` is a promise the sweeper must not break |
+| Timeline gating | engine-level `isCaptureConfirmed`, automatic | `recordTimeline:` parameter on `goToQuestion` | **Engine gating kept** — it cannot be forgotten at a call site |
+| Permission injection | concrete `AVPermissionService` | concrete | **Changed to the `PermissionService` protocol**, so the wrapper is testable |
 
 ## Proposed and rejected
 

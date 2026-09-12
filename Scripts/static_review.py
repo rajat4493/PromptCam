@@ -27,6 +27,8 @@ CORE = ROOT / "Sources" / "PromptCamCore"
 IOS = ROOT / "Sources" / "PromptCamiOS"
 PLATFORM = IOS / "Platform"
 TESTS = ROOT / "Tests"
+CORE_TESTS = TESTS / "PromptCamCoreTests"
+IOS_TESTS = TESTS / "PromptCamiOSTests"
 
 FORBIDDEN_CORE_IMPORTS = [
     "SwiftUI", "UIKit", "AVFoundation", "AVKit", "SwiftData",
@@ -250,15 +252,24 @@ def summarise() -> None:
     core = swift_files(CORE)
     ios = swift_files(IOS)
     tests = swift_files(TESTS)
+    core_tests = swift_files(CORE_TESTS)
+    ios_tests = swift_files(IOS_TESTS)
     notes.append(f"PromptCamCore:  {len(core)} files, {sum(len(p.read_text().splitlines()) for p in core)} lines")
     notes.append(f"PromptCamiOS:   {len(ios)} files, {sum(len(p.read_text().splitlines()) for p in ios)} lines")
     notes.append(f"Tests:          {len(tests)} files, {sum(len(p.read_text().splitlines()) for p in tests)} lines")
     platform = swift_files(PLATFORM)
     notes.append(f"Platform/ (unverified API surface): {len(platform)} files")
-    test_count = 0
-    for path in tests:
-        test_count += len(re.findall(r"^\s*@Test", path.read_text(), re.MULTILINE))
-    notes.append(f"Declared test cases: {test_count}")
+    def count_tests(paths):
+        return sum(
+            len(re.findall(r"^\s*@Test", p.read_text(), re.MULTILINE)) for p in paths
+        )
+
+    runnable = count_tests(core_tests)
+    mac_only = count_tests(ios_tests)
+    notes.append(
+        f"Declared test cases: {runnable + mac_only} "
+        f"({runnable} runnable via `swift test`, {mac_only} require Xcode)"
+    )
 
 
 def main() -> int:
