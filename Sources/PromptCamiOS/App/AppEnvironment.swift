@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import SwiftData
 import PromptCamCore
@@ -19,11 +20,6 @@ final class AppEnvironment {
     let deckRepository: any DeckRepository
     let recordingRepository: any RecordingRepository
 
-    /// The live capture service.
-    ///
-    /// One instance for the app's lifetime so the preview layer and the
-    /// recorder share a session, and so the camera is opened once.
-    let captureService: AVFoundationCaptureService
 
     init(modelContext: ModelContext) {
         self.capabilities = DuoCapabilityProvider.current()
@@ -32,7 +28,6 @@ final class AppEnvironment {
         self.permissions = AVPermissionService()
         self.deckRepository = SwiftDataDeckRepository(context: modelContext)
         self.recordingRepository = SwiftDataRecordingRepository(context: modelContext)
-        self.captureService = AVFoundationCaptureService()
     }
 
     func makeDeckLibraryModel() -> DeckLibraryModel {
@@ -43,20 +38,35 @@ final class AppEnvironment {
         RecordingsLibraryModel(repository: recordingRepository, store: store)
     }
 
-    func makeSessionModel(
+    /// One interview, with the capture pipeline it owns.
+    ///
+    /// `CaptureService.events` is a single-consumer `AsyncStream`, and
+    /// `tearDown()` finishes that stream — so a service cannot be reused across
+    /// takes, and two session models sharing one service would compete for the
+    /// same events. Each session therefore gets its own pipeline, and hands
+    /// back its own `AVCaptureSession` for the preview layer.
+    struct PreparedSession: Identifiable {
+        let id = UUID()
+        let model: DirectorSessionModel
+        let previewSession: AVCaptureSession
+    }
+
+    func makeSession(
         deck: DeckModel,
         options: SubjectDisplayOptions
-    ) -> DirectorSessionModel {
-        DirectorSessionModel(
+    ) -> PreparedSession {
+        let capture = AVFoundationCaptureService()
+        let model = DirectorSessionModel(
             deckName: deck.displayName,
             questions: deck.sessionQuestionTexts,
             displayOptions: options,
             capabilities: capabilities,
             flags: flags,
-            captureService: captureService,
+            captureService: capture,
             store: store,
             recordings: recordingRepository,
             permissions: permissions
         )
+        return PreparedSession(model: model, previewSession: capture.captureSession)
     }
 }

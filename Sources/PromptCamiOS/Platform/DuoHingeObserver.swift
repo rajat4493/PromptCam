@@ -9,7 +9,8 @@ enum FoldPosition: Equatable, Sendable {
     /// The platform does not report hinge state, or reporting is switched off.
     case unknown
     case closed
-    case partiallyOpen(angle: Double)
+    /// Partly folded, with the hinge angle in degrees.
+    case partiallyOpen(degrees: Double)
     case fullyOpen
 
     /// Whether the operator's controls are likely to be awkward to reach.
@@ -60,7 +61,13 @@ struct HingeObservationModifier: ViewModifier {
                 case .closed:
                     onChange(.closed)
                 case .partiallyOpen:
-                    onChange(.partiallyOpen(angle: Double(hinge.angle)))
+                    // REQUIRES_MAC_VALIDATION — `hinge.angle` is expected to be
+                    // a SwiftUI `Angle`, not a number: Apple's own example
+                    // passes it straight to a function taking `Angle`, and
+                    // `Double(_:)` has no initialiser for it. `.degrees` is the
+                    // accessor to confirm. If it turns out to be a numeric type
+                    // after all, use it directly and delete this conversion.
+                    onChange(.partiallyOpen(degrees: hinge.angle.degrees))
                 default:
                     // `.fullyOpen` and any future case: treat as fully open
                     // rather than guessing at an unknown case's meaning.

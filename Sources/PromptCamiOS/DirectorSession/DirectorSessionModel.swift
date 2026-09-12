@@ -10,9 +10,28 @@ import PromptCamCore
 ///
 /// The engine owns *what is true*. This class owns *when things happen*: it
 /// drives the countdown and elapsed-time timers, consumes the capture event
-/// stream, moves files, and persists the result. It contains no business rules
-/// of its own — every state change goes through the engine, so the rules stay
-/// in the layer that has tests.
+/// stream, moves files, and persists the result. It holds no business rules of
+/// its own — every state change goes through the engine, so the rules stay in
+/// the layer that has tests.
+///
+/// ## Capture lifecycle, and the three races it has to survive
+///
+/// 1. **Stop before capture has actually started.** The engine enters
+///    `.recording` when the operator taps record, but AVFoundation does not
+///    begin writing until `didStartRecording` fires. A stop in that window used
+///    to reach an output that was not yet recording, so nothing happened and
+///    the session sat in `.finishing` forever. Stop is now *queued* until
+///    capture is confirmed, and a watchdog fails the session if capture never
+///    starts at all.
+/// 2. **A file finishing after the session already ended.** An interruption
+///    brings the session to rest, and AVFoundation may still deliver a
+///    completed file afterwards. `finalise` is the single, idempotent
+///    reconciliation point: it never claims a save for a session that already
+///    ended, it moves the file somewhere persistent, and it updates the library
+///    row the session already wrote.
+/// 3. **A second finalisation.** `hasFinalised` makes every path after the
+///    first a no-op, so a failure followed by a completion (or two completions)
+///    cannot double-file or double-persist.
 @MainActor
 @Observable
 final class DirectorSessionModel {
@@ -49,10 +68,28 @@ final class DirectorSessionModel {
     private var captureTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
     private var tickerTask: Task<Void, Never>?
+    private var startupWatchdogTask: Task<Void, Never>?
+
+    // MARK: - Capture lifecycle flags
+
+    /// True once AVFoundation has confirmed the first byte is on disk.
+    private var hasCaptureStarted = false
+    /// True when the operator asked to stop before capture was confirmed.
+    private var stopRequestedBeforeStart = false
+    /// Guards `finalise` so it runs exactly once per take.
+    private var hasFinalised = false
+    /// The capture in flight, so the sweeper can be told to leave it alone.
+    private var activeTemporaryPath: String?
 
     /// The countdown length. Three seconds is long enough for the subject to
     /// look up and short enough not to feel like waiting.
     private let countdownSeconds = 3
+
+    /// How long to wait for `didStartRecording` before giving up.
+    ///
+    /// Without this, a capture that never starts leaves the session stuck in
+    /// `.finishing` with no way out and no explanation.
+    private let captureStartTimeout: Duration = .seconds(8)
 
     init(
         deckName: String,
@@ -99,11 +136,11 @@ final class DirectorSessionModel {
     /// Blocks swipe-to-dismiss and the close button while a take is live.
     var blocksDismissal: Bool { engine.shouldBlockDismissal }
 
-    /// Whether the record button should be tappable. Also what stops a
-    /// double-tap from reaching the engine in the first place.
     var canStartRecording: Bool {
         engine.canApply(.beginRecording) || engine.canApply(.startCountdown(seconds: countdownSeconds))
     }
+    /// Stop stays available during the pre-start window — the request is queued
+    /// rather than dropped, so the button must not be disabled there.
     var canStopRecording: Bool { engine.canApply(.stop) }
     var canAddMarker: Bool { state.isCapturing }
 
@@ -115,11 +152,15 @@ final class DirectorSessionModel {
 
     // MARK: - Lifecycle
 
-    /// Checks permission, cleans up old temporary captures and configures capture.
+    /// Checks permission, sweeps genuinely abandoned captures, configures capture.
     func begin() async {
-        // Abandoned captures from a previous crash are removed before a new
-        // take, never during one.
-        try? store.cleanUpAbandonedTemporaryFiles()
+        // Sweep only captures that are old AND not in use. This used to delete
+        // every file in the capture directory, which destroyed the very
+        // recordings the app had promised to keep.
+        try? store.cleanUpAbandonedTemporaryFiles(
+            excluding: activeTemporaryPath.map { [$0] } ?? [],
+            olderThan: RecordingFileStore.abandonedCaptureAge
+        )
 
         let snapshot = await permissions.snapshot()
         guard snapshot.canRecord else {
@@ -144,17 +185,24 @@ final class DirectorSessionModel {
     }
 
     /// Releases the camera and stops every timer.
+    ///
+    /// Clears `captureTask` as well as cancelling it, so a later `begin()` can
+    /// subscribe again instead of silently refusing to.
     func end() async {
-        countdownTask?.cancel()
-        tickerTask?.cancel()
+        countdownTask?.cancel(); countdownTask = nil
+        tickerTask?.cancel(); tickerTask = nil
+        startupWatchdogTask?.cancel(); startupWatchdogTask = nil
+
         await captureService.tearDown()
+
         captureTask?.cancel()
+        captureTask = nil
     }
 
     // MARK: - Operator actions
 
-    /// Record button. Starts a countdown, or rolls immediately if the operator
-    /// has already counted down.
+    /// Record button. Starts a countdown, or rolls immediately if the countdown
+    /// has already finished.
     func tapRecord() {
         // Both branches ask the engine whether the move is legal, so a fast
         // double-tap is absorbed here and would be rejected again by the engine
@@ -175,6 +223,14 @@ final class DirectorSessionModel {
             return
         }
         tickerTask?.cancel()
+
+        guard hasCaptureStarted else {
+            // Capture has not actually begun, so asking the output to stop
+            // would do nothing and the session would hang in `.finishing`.
+            // Remember the request; `.recordingStarted` honours it immediately.
+            stopRequestedBeforeStart = true
+            return
+        }
         Task { await captureService.stopRecording() }
     }
 
@@ -185,32 +241,22 @@ final class DirectorSessionModel {
     }
 
     func addMarker() {
-        guard engine.addMarker(at: clock.now) != nil else { return }
+        _ = engine.addMarker(at: clock.now)
     }
 
-    func nextQuestionTapped() {
-        engine.goToNextQuestion(at: clock.now)
-    }
-
-    func previousQuestionTapped() {
-        engine.goToPreviousQuestion(at: clock.now)
-    }
-
-    func selectQuestion(at index: Int) {
-        engine.goToQuestion(index, at: clock.now)
-    }
-
-    func updateDisplayOptions(_ options: SubjectDisplayOptions) {
-        engine.updateDisplayOptions(options)
-    }
-
-    func dismissAlert() {
-        alert = nil
-    }
+    func nextQuestionTapped() { engine.goToNextQuestion(at: clock.now) }
+    func previousQuestionTapped() { engine.goToPreviousQuestion(at: clock.now) }
+    func selectQuestion(at index: Int) { engine.goToQuestion(index, at: clock.now) }
+    func updateDisplayOptions(_ options: SubjectDisplayOptions) { engine.updateDisplayOptions(options) }
+    func dismissAlert() { alert = nil }
 
     /// Clears a finished take so another can be recorded with the same deck.
     func startAnotherTake() async {
         completedRecording = nil
+        hasCaptureStarted = false
+        stopRequestedBeforeStart = false
+        hasFinalised = false
+        activeTemporaryPath = nil
         try? engine.reset()
         await begin()
     }
@@ -288,8 +334,33 @@ final class DirectorSessionModel {
             return
         }
 
+        hasCaptureStarted = false
+        stopRequestedBeforeStart = false
+        hasFinalised = false
+        activeTemporaryPath = temporaryPath
+
         startTicker()
+        startStartupWatchdog()
         Task { await captureService.startRecording(toPath: temporaryPath) }
+    }
+
+    /// Fails the session if capture never actually starts.
+    ///
+    /// Without this a pipeline that accepts `startRecording` but never reports
+    /// `didStartRecording` leaves the operator staring at a running timer that
+    /// is recording nothing.
+    private func startStartupWatchdog() {
+        startupWatchdogTask?.cancel()
+        startupWatchdogTask = Task { [weak self] in
+            try? await Task.sleep(for: self?.captureStartTimeout ?? .seconds(8))
+            if Task.isCancelled { return }
+            guard let self, !self.hasCaptureStarted else { return }
+            guard self.state.isCapturing || self.state == .finishing else { return }
+
+            self.applyFailure(
+                .captureFailed("The camera did not start recording. Nothing was captured.")
+            )
+        }
     }
 
     private func startTicker() {
@@ -325,20 +396,28 @@ final class DirectorSessionModel {
             applyFailure(failure)
 
         case .recordingStarted:
+            hasCaptureStarted = true
+            startupWatchdogTask?.cancel()
+            startupWatchdogTask = nil
             // Rebase the timeline onto the real first byte so every marker
             // offset matches the finished file.
             engine.noteCaptureStarted(at: clock.now)
 
+            if stopRequestedBeforeStart {
+                // The operator asked to stop during the start-up window. Honour
+                // it now that there is actually something to stop.
+                stopRequestedBeforeStart = false
+                await captureService.stopRecording()
+            }
+
         case .recordingFinished(let path, let duration):
-            await finishRecording(temporaryPath: path, duration: duration)
+            await finalise(temporaryPath: path, duration: duration)
 
         case .recordingFailed(let failure):
-            // A mid-recording failure is reported with whatever elapsed time is
-            // known, and any partial file is left on disk.
-            applyFailure(failure, duration: engine.duration(now: clock.now))
+            await finaliseFailure(failure)
 
         case .interrupted(let reason):
-            applyInterruption(reason)
+            await applyInterruption(reason)
 
         case .interruptionEnded:
             // Deliberately does not resume automatically. Restarting capture
@@ -351,38 +430,138 @@ final class DirectorSessionModel {
         }
     }
 
-    /// Moves the captured file into permanent storage.
-    ///
-    /// The only path to a "saved" claim, and it runs only in response to the
-    /// operating system reporting a finalised file.
-    private func finishRecording(temporaryPath: String, duration: TimeInterval) async {
-        tickerTask?.cancel()
-        let startedAt = engine.captureStartedAt ?? clock.now
+    // MARK: - Finalisation
+    //
+    // One idempotent entry point per take. Everything that ends a capture comes
+    // through here so a late callback cannot contradict a session that has
+    // already come to rest.
 
+    /// The operating system finalised a file.
+    private func finalise(temporaryPath: String, duration: TimeInterval) async {
+        guard !hasFinalised else { return }
+        hasFinalised = true
+
+        tickerTask?.cancel()
+        startupWatchdogTask?.cancel()
+
+        switch engine.state {
+        case .finishing:
+            await storeAndConfirm(temporaryPath: temporaryPath, duration: duration)
+
+        case .recording:
+            // Capture ended without the operator asking — the output stopped
+            // itself. Route through the normal stop so the state machine stays
+            // legal, then file it like any other completed take.
+            try? engine.stop()
+            await storeAndConfirm(temporaryPath: temporaryPath, duration: duration)
+
+        default:
+            // The session already ended (interrupted, or failed) and the file
+            // arrived afterwards. It is NOT a successful take and must not be
+            // reported as saved. Move it somewhere persistent and attach it to
+            // the row already written, so the operator can recover it.
+            await reconcileLateFile(temporaryPath: temporaryPath, duration: duration)
+        }
+    }
+
+    /// Capture ended without producing a usable file.
+    private func finaliseFailure(_ failure: RecordingFailure) async {
+        guard !hasFinalised else { return }
+        hasFinalised = true
+
+        tickerTask?.cancel()
+        startupWatchdogTask?.cancel()
+
+        // Whatever partial file exists belongs to the operator. Move it out of
+        // the sweeper's reach before reporting.
+        let preserved = preserveActiveCapture()
+        let elapsedNow = engine.duration(now: clock.now)
+
+        if engine.canApply(.fail(failure)) {
+            try? engine.fail(failure, duration: elapsedNow)
+            engine.attachRecoveredFile(path: preserved, duration: elapsedNow)
+        } else {
+            engine.attachRecoveredFile(path: preserved, duration: elapsedNow)
+        }
+
+        alert = SessionAlert(
+            title: "Recording problem",
+            message: failure.operatorMessage + recoveryClause(for: preserved),
+            offersSettings: false
+        )
+        await persistResult()
+    }
+
+    /// Moves a confirmed capture into permanent storage, then — and only then —
+    /// claims the save.
+    private func storeAndConfirm(temporaryPath: String, duration: TimeInterval) async {
+        let startedAt = engine.captureStartedAt ?? clock.now
         do {
             let stored = try store.store(temporaryPath: temporaryPath, startedAt: startedAt)
             try engine.confirmSaved(fileName: stored.fileName, duration: duration)
-        } catch let error as RecordingStoreError {
-            // The file is still on disk. Keep its path so the operator can
-            // recover the interview.
-            let preserved = FileManager.default.fileExists(atPath: temporaryPath) ? temporaryPath : nil
-            try? engine.failSave(reason: error.reasonText, preservedPath: preserved, duration: duration)
+            activeTemporaryPath = nil
         } catch {
-            let preserved = FileManager.default.fileExists(atPath: temporaryPath) ? temporaryPath : nil
-            try? engine.failSave(
-                reason: error.localizedDescription,
-                preservedPath: preserved,
-                duration: duration
+            // Filing failed. The capture is still at its temporary path, so move
+            // it somewhere the sweeper cannot reach and record where it went.
+            let reason = (error as? RecordingStoreError)?.reasonText ?? error.localizedDescription
+            let preserved = preserveActiveCapture(fallbackPath: temporaryPath)
+
+            try? engine.failSave(reason: reason, preservedPath: preserved, duration: duration)
+            engine.attachRecoveredFile(path: preserved, duration: duration)
+
+            alert = SessionAlert(
+                title: "Could not file the interview",
+                message: reason + recoveryClause(for: preserved),
+                offersSettings: false
             )
         }
-
         await persistResult()
+    }
+
+    /// Handles a file that finished after the session already ended.
+    ///
+    /// Never claims a save. Updates the existing library row so the interview is
+    /// recoverable rather than orphaned on disk with nothing pointing at it.
+    private func reconcileLateFile(temporaryPath: String, duration: TimeInterval) async {
+        let preserved = preserveActiveCapture(fallbackPath: temporaryPath)
+        engine.attachRecoveredFile(path: preserved, duration: duration)
+        await persistResult()
+    }
+
+    /// Moves the in-flight capture into the recovery directory.
+    ///
+    /// Returns the path the file actually occupies afterwards — the recovery
+    /// path on success, the original path if the move failed but the file is
+    /// still there, or `nil` if there is no file at all. Never reports a path
+    /// that does not exist.
+    private func preserveActiveCapture(fallbackPath: String? = nil) -> String? {
+        guard let candidate = fallbackPath ?? activeTemporaryPath ?? engine.temporaryCapturePath else {
+            return nil
+        }
+        if let recovered = try? store.preserveForRecovery(temporaryPath: candidate) {
+            activeTemporaryPath = nil
+            return recovered
+        }
+        return store.preservedFileExists(atPath: candidate) ? candidate : nil
+    }
+
+    private func recoveryClause(for preservedPath: String?) -> String {
+        preservedPath == nil
+            ? " No video file survived."
+            : " The video that was captured has been kept, and you can recover it from the interview's details."
     }
 
     private func applyFailure(_ failure: RecordingFailure, duration: TimeInterval = 0) {
         tickerTask?.cancel()
         countdownTask?.cancel()
+        startupWatchdogTask?.cancel()
+
+        guard engine.canApply(.fail(failure)) else { return }
         try? engine.fail(failure, duration: duration)
+
+        let preserved = preserveActiveCapture()
+        engine.attachRecoveredFile(path: preserved, duration: duration)
+
         alert = SessionAlert(
             title: "Recording problem",
             message: failure.operatorMessage,
@@ -391,10 +570,12 @@ final class DirectorSessionModel {
         Task { await persistResult() }
     }
 
-    private func applyInterruption(_ reason: InterruptionReason) {
+    private func applyInterruption(_ reason: InterruptionReason) async {
         guard engine.canApply(.interrupt(reason)) else { return }
         tickerTask?.cancel()
         countdownTask?.cancel()
+
+        let wasCapturing = state.isCapturing
         try? engine.interrupt(reason, at: clock.now)
 
         alert = SessionAlert(
@@ -402,14 +583,23 @@ final class DirectorSessionModel {
             message: reason.operatorMessage + " Any video captured so far has been kept.",
             offersSettings: false
         )
-        Task { await persistResult() }
+        await persistResult()
+
+        if wasCapturing {
+            // Ask the pipeline to finalise what it has. The completion callback
+            // arrives after the session is already terminal, and `finalise`
+            // routes it to `reconcileLateFile` — which preserves the file and
+            // updates this row rather than claiming a save.
+            await captureService.stopRecording()
+        }
     }
 
     /// Writes the outcome to the library.
     ///
     /// Every terminal outcome is recorded, including failures and
     /// interruptions, so a lost interview leaves a trace the operator can act
-    /// on rather than vanishing.
+    /// on rather than vanishing. The snapshot carries a stable identifier, so
+    /// calling this again after a late reconciliation updates the same row.
     private func persistResult() async {
         guard let snapshot = engine.resultSnapshot() else { return }
         let model = snapshot.makeRecordingModel()
@@ -434,6 +624,6 @@ struct SessionAlert: Identifiable, Equatable {
     let id = UUID()
     let title: String
     let message: String
-    /// Whether a "Open Settings" button is useful for this problem.
+    /// Whether an "Open Settings" button is useful for this problem.
     let offersSettings: Bool
 }

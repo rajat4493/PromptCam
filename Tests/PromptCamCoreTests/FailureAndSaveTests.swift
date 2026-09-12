@@ -112,12 +112,14 @@ struct SaveIntegrityTests {
 
         let abandoned = try store.makeTemporaryPath()
         try store.writeFakeCapture(at: abandoned)
+        // Only files old enough to be genuinely abandoned are swept.
+        try store.backdate(path: abandoned, by: 7200)
 
         let keeper = try store.makeTemporaryPath()
         try store.writeFakeCapture(at: keeper)
         let stored = try store.store(temporaryPath: keeper, startedAt: Date())
 
-        try store.cleanUpAbandonedTemporaryFiles()
+        try store.cleanUpAbandonedTemporaryFiles(excluding: [], olderThan: 3600)
 
         #expect(FileManager.default.fileExists(atPath: abandoned) == false)
         #expect(FileManager.default.fileExists(atPath: stored.path))

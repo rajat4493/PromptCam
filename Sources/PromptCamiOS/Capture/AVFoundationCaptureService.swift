@@ -36,6 +36,12 @@ final class AVFoundationCaptureService: NSObject, CaptureService, @unchecked Sen
     private var currentOutputURL: URL?
     private var levelTimer: DispatchSourceTimer?
     private var hasEmittedStart = false
+    /// Set when a stop arrives before the output has actually begun recording.
+    ///
+    /// Defence in depth: `DirectorSessionModel` already queues stop until
+    /// `.recordingStarted`, but the same race exists for anything else driving
+    /// this service, and losing a stop leaves a capture running unattended.
+    private var stopRequestedBeforeStart = false
 
     /// Exposed so the preview layer can attach to the same session.
     var captureSession: AVCaptureSession { session }
@@ -94,6 +100,7 @@ final class AVFoundationCaptureService: NSObject, CaptureService, @unchecked Sen
 
                 self.currentOutputURL = url
                 self.hasEmittedStart = false
+                self.stopRequestedBeforeStart = false
                 self.movieOutput.startRecording(to: url, recordingDelegate: self)
                 resume.resume()
             }
@@ -108,6 +115,13 @@ final class AVFoundationCaptureService: NSObject, CaptureService, @unchecked Sen
                 // delegate callback below.
                 if self.movieOutput.isRecording {
                     self.movieOutput.stopRecording()
+                } else if self.currentOutputURL != nil {
+                    // A stop arrived between `startRecording` and the output
+                    // actually starting. Asking it to stop now would do
+                    // nothing, so remember the request and honour it the moment
+                    // recording begins — otherwise the capture runs on with
+                    // nobody waiting for it.
+                    self.stopRequestedBeforeStart = true
                 }
                 resume.resume()
             }
@@ -342,6 +356,15 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
         // The first byte is on disk. The session rebases marker offsets from
         // here, so a slow camera start does not skew every timestamp.
         continuation.yield(.recordingStarted)
+
+        if stopRequestedBeforeStart {
+            stopRequestedBeforeStart = false
+            // Honour the stop that arrived too early. Runs on the session queue
+            // because this delegate callback is delivered there.
+            if movieOutput.isRecording {
+                movieOutput.stopRecording()
+            }
+        }
     }
 
     func fileOutput(
@@ -351,6 +374,7 @@ extension AVFoundationCaptureService: AVCaptureFileOutputRecordingDelegate {
         error: Error?
     ) {
         currentOutputURL = nil
+        stopRequestedBeforeStart = false
 
         if let error = error as NSError? {
             // AVFoundation reports a partial-but-usable file through

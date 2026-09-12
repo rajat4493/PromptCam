@@ -46,6 +46,15 @@ final class RecordingsLibraryModel {
         store.playbackURL(for: recording)
     }
 
+    /// A preserved file from a take that did not save, if it is still on disk.
+    ///
+    /// Checked for existence rather than trusted, so the UI never offers a
+    /// recovery action that would fail. This is what makes "your video has been
+    /// kept" actionable instead of just a sentence and a sandbox path.
+    func recoveryURL(for recording: InterviewRecordingModel) -> URL? {
+        store.recoveryURL(for: recording)
+    }
+
     /// Writes the marker list and returns the file to share.
     func exportMarkers(
         for recording: InterviewRecordingModel,

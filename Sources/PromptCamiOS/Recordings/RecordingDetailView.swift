@@ -79,14 +79,40 @@ struct RecordingDetailView: View {
                     .foregroundStyle(Theme.Palette.warning)
             }
 
-            if let preserved = recording.preservedFilePath {
-                VStack(alignment: .leading, spacing: Theme.Space.tight) {
-                    Text("Kept file").font(.caption.weight(.medium))
-                    Text(preserved)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+        }
+
+        recoverySection
+    }
+
+    /// The recovery affordance for a take that did not save.
+    ///
+    /// Only appears when a preserved file genuinely still exists — a recorded
+    /// path is not proof of a recoverable file, and offering recovery for a
+    /// file that has gone would be worse than saying nothing. Printing a
+    /// sandbox path is not a recovery mechanism, so this offers a share sheet
+    /// the operator can actually use to get the video off the device.
+    @ViewBuilder
+    private var recoverySection: some View {
+        if let url = model.recoveryURL(for: recording) {
+            Section {
+                ShareLink(item: url) {
+                    Label("Recover video", systemImage: "arrow.up.doc")
                 }
+            } header: {
+                Text("Recover")
+            } footer: {
+                Text("This interview did not finish saving, but the video that was captured is still on this device. Save or send it now — it is the only copy.")
+            }
+        } else if recording.preservedFilePath != nil {
+            Section {
+                Label {
+                    Text("The kept video file is no longer on this device.")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                }
+                .foregroundStyle(.secondary)
+            } header: {
+                Text("Recover")
             }
         }
     }

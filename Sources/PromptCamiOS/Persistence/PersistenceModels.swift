@@ -118,6 +118,30 @@ final class StoredRecording {
         }
     }
 
+    /// Rewrites this row in place from `model`.
+    ///
+    /// Used by the upsert path when a session reconciles a late file. Children
+    /// are replaced wholesale — they are few, and a diffing bug here would
+    /// silently corrupt a marker timeline.
+    func update(from model: InterviewRecordingModel) {
+        deckName = model.deckName
+        startedAt = model.startedAt
+        duration = model.duration
+        fileName = model.fileName
+        preservedFilePath = model.preservedFilePath
+        outcomeRaw = model.outcome.rawValue
+        failureDescription = model.failureDescription
+
+        markers.removeAll()
+        markers = model.markers.map {
+            StoredMarker(identifier: $0.id, offset: $0.offset, label: $0.label)
+        }
+        questionChanges.removeAll()
+        questionChanges = model.questionChanges.map {
+            StoredQuestionChange(identifier: $0.id, offset: $0.offset, index: $0.index, text: $0.text)
+        }
+    }
+
     func toModel() -> InterviewRecordingModel {
         InterviewRecordingModel(
             id: identifier,

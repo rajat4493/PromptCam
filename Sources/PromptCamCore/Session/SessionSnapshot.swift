@@ -66,6 +66,9 @@ public struct SubjectSnapshot: Equatable, Sendable {
 /// The outcome of a session, in a form the iOS layer can persist without
 /// reaching back into the live session object.
 public struct SessionResultSnapshot: Equatable, Sendable {
+    /// Stable identity, so a late reconciliation updates the library row the
+    /// session already wrote rather than inserting a duplicate.
+    public let identifier: UUID
     public let deckName: String
     public let startedAt: Date
     public let duration: TimeInterval
@@ -79,6 +82,7 @@ public struct SessionResultSnapshot: Equatable, Sendable {
     public let questionChanges: [QuestionChangeModel]
 
     public init(
+        identifier: UUID = UUID(),
         deckName: String,
         startedAt: Date,
         duration: TimeInterval,
@@ -89,6 +93,7 @@ public struct SessionResultSnapshot: Equatable, Sendable {
         markers: [MarkerModel],
         questionChanges: [QuestionChangeModel]
     ) {
+        self.identifier = identifier
         self.deckName = deckName
         self.startedAt = startedAt
         self.duration = duration
@@ -100,10 +105,11 @@ public struct SessionResultSnapshot: Equatable, Sendable {
         self.questionChanges = questionChanges
     }
 
-    /// Converts to the persistable model.
-    public func makeRecordingModel(id: UUID = UUID()) -> InterviewRecordingModel {
+    /// Converts to the persistable model, carrying the session's stable identity
+    /// so repeated saves upsert the same row.
+    public func makeRecordingModel() -> InterviewRecordingModel {
         InterviewRecordingModel(
-            id: id,
+            id: identifier,
             deckName: deckName,
             startedAt: startedAt,
             duration: duration,

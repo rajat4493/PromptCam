@@ -52,6 +52,17 @@ public struct InterviewSessionEngine: Sendable {
     public private(set) var subjectAvailability: SubjectDisplayAvailability
     /// Temporary capture path, retained so a failed save can preserve the file.
     public private(set) var temporaryCapturePath: String?
+    /// Where a capture that could not be filed actually ended up.
+    ///
+    /// Set by `attachRecoveredFile` once the platform layer has moved the file
+    /// somewhere persistent. Preferred over `temporaryCapturePath` when
+    /// reporting a result, because the temporary path is swept eventually.
+    public private(set) var recoveredFilePath: String?
+    /// Stable identity for this session's library row.
+    ///
+    /// Fixed at construction so a late reconciliation updates the row the
+    /// session already wrote instead of inserting a duplicate.
+    public let resultIdentifier: UUID
     /// Direction the session is capturing from. PromptCam records the subject.
     public private(set) var captureDirection: CaptureDirection
 
@@ -83,6 +94,8 @@ public struct InterviewSessionEngine: Sendable {
         self.audioLevel = 0
         self.subjectAvailability = capabilities.initialSubjectDisplayAvailability
         self.temporaryCapturePath = nil
+        self.recoveredFilePath = nil
+        self.resultIdentifier = UUID()
     }
 
     // MARK: - Derived state
@@ -247,6 +260,7 @@ public struct InterviewSessionEngine: Sendable {
         finalDuration = 0
         audioLevel = 0
         temporaryCapturePath = nil
+        recoveredFilePath = nil
     }
 
     /// Whether an event would be accepted, for enabling and disabling controls.
@@ -346,6 +360,24 @@ public struct InterviewSessionEngine: Sendable {
         captureDirection = direction
     }
 
+    /// Records where a capture that could not be filed actually ended up.
+    ///
+    /// Called when the operating system finalises a file *after* the session has
+    /// already come to rest — an interruption, then a late completion callback.
+    /// Deliberately does **not** change `state`: the session ended as
+    /// interrupted or failed, and a file appearing afterwards does not retrospectively
+    /// make it a successful take. It only makes the file recoverable.
+    ///
+    /// Rejected unless the session is terminal and not already saved, so this
+    /// can never be used as a back door into claiming a save.
+    @discardableResult
+    public mutating func attachRecoveredFile(path: String?, duration: TimeInterval) -> Bool {
+        guard state.isTerminal, !state.hasConfirmedSavedFile else { return false }
+        recoveredFilePath = path
+        if duration > 0, finalDuration == 0 { finalDuration = duration }
+        return true
+    }
+
     // MARK: - Result
 
     /// The persistable outcome, available once the session has come to rest.
@@ -375,14 +407,19 @@ public struct InterviewSessionEngine: Sendable {
         case .interrupted(let reason):
             outcome = .interrupted
             failureDescription = reason.operatorMessage
-            // A partial file is kept, never deleted, so the operator can try
-            // to salvage the take.
+            // A partial file is kept, never deleted, so the operator can try to
+            // salvage the take.
             preservedPath = temporaryCapturePath
         default:
             return nil
         }
 
+        // Once the platform layer has moved the file somewhere persistent, that
+        // is the path worth recording: the temporary one is swept eventually.
+        if let recoveredFilePath { preservedPath = recoveredFilePath }
+
         return SessionResultSnapshot(
+            identifier: resultIdentifier,
             deckName: deckName,
             startedAt: startedAt,
             duration: finalDuration,

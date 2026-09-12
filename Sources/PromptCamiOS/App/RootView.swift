@@ -13,18 +13,12 @@ struct RootView: View {
     let isUsingEphemeralStore: Bool
 
     @State private var pendingDeck: DeckModel?
-    @State private var activeSession: ActiveSession?
+    @State private var activeSession: AppEnvironment.PreparedSession?
     @State private var selectedTab = Tab.decks
 
     enum Tab: Hashable {
         case decks
         case interviews
-    }
-
-    /// A configured, running interview.
-    struct ActiveSession: Identifiable {
-        let id = UUID()
-        let model: DirectorSessionModel
     }
 
     var body: some View {
@@ -46,9 +40,7 @@ struct RootView: View {
                             flags: environment.flags,
                             permissions: environment.permissions
                         ) { options in
-                            activeSession = ActiveSession(
-                                model: environment.makeSessionModel(deck: deck, options: options)
-                            )
+                            activeSession = environment.makeSession(deck: deck, options: options)
                         }
                     }
                 }
@@ -63,7 +55,7 @@ struct RootView: View {
         .fullScreenCover(item: $activeSession) { session in
             DirectorSessionView(
                 model: session.model,
-                previewSession: environment.captureService.captureSession
+                previewSession: session.previewSession
             ) {
                 Task {
                     await session.model.end()

@@ -29,6 +29,15 @@ options:
   groupSortPosition: top
   defaultConfig: Debug
 
+# Three configurations. `Duo` exists so the iPhone Duo code paths can be built
+# and run without editing the project: it is Debug plus the PROMPTCAM_DUO
+# compilation condition. Debug and Release stay Duo-free so the baseline build
+# and the test run can never be blocked by an unconfirmed Duo API signature.
+configs:
+  Debug: debug
+  Duo: debug
+  Release: release
+
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -94,18 +103,24 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.promptcam.PromptCam
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
-        # To enable the iPhone Duo code paths, add PROMPTCAM_DUO here:
-        #   SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG PROMPTCAM_DUO
-        # Off by default so the baseline build and test run cannot be blocked
-        # by an unconfirmed Duo API signature.
+        # The iPhone Duo code paths live in the `Duo` configuration below and
+        # the "PromptCam (Duo)" scheme, not here, so the baseline build and the
+        # test run cannot be blocked by an unconfirmed Duo API signature.
         # See Sources/PromptCamiOS/Platform/README.md.
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Duo:
+          # Enables Sources/PromptCamiOS/Platform. Expect to reconcile the
+          # supplied Duo API signatures here first — see
+          # docs/APPLE_API_CORRECTIONS.md and docs/MAC_VALIDATION.md step 8.
+          # Add PROMPTCAM_USE_ARRANGEMENT_VIEW to also trial ArrangementView.
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG PROMPTCAM_DUO
         Release:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
 
 schemes:
+  # Baseline: ordinary iPhone behaviour, no Duo symbols referenced at all.
   PromptCam:
     build:
       targets:
@@ -118,3 +133,12 @@ schemes:
       # (`swift test`), not through this scheme, so they stay runnable without
       # a Simulator. See README.md.
       targets: []
+
+  # iPhone Duo: the differentiated experience. Select this scheme to build the
+  # subject-facing accessory, reserved-region layout and hinge observation.
+  PromptCam (Duo):
+    build:
+      targets:
+        PromptCam: all
+    run:
+      config: Duo

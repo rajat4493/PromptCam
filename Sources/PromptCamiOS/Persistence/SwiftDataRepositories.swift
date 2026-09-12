@@ -12,10 +12,20 @@ import PromptCamCore
 /// `assumeIsolated` call that would crash if the assumption were ever wrong.
 @MainActor
 final class SwiftDataDeckRepository: DeckRepository {
-    private let context: ModelContext
+    /// Records that the shipped sample deck has been inserted once.
+    ///
+    /// Stored outside the database on purpose. Keying seeding on "is the
+    /// database empty?" reseeds the sample every time the user deletes every
+    /// deck — which contradicts the promise that a deliberately deleted sample
+    /// stays deleted.
+    static let hasSeededSampleKey = "com.promptcam.hasSeededSampleDeck"
 
-    init(context: ModelContext) {
+    private let context: ModelContext
+    private let defaults: UserDefaults
+
+    init(context: ModelContext, defaults: UserDefaults = .standard) {
         self.context = context
+        self.defaults = defaults
     }
 
     func loadDecks() async throws -> [DeckModel] {
@@ -51,14 +61,22 @@ final class SwiftDataDeckRepository: DeckRepository {
     }
 
     func seedSampleDeckIfNeeded(now: Date) async throws {
-        // Seed only when the store is completely empty. A user who deliberately
-        // deleted the sample deck must not have it reappear.
+        // Seed at most once, ever. A user who deletes the sample deck — or every
+        // deck — must not have it reappear on the next launch.
+        guard !defaults.bool(forKey: Self.hasSeededSampleKey) else { return }
+
+        // Belt and braces: if decks already exist, this install has been used,
+        // so mark it seeded without inserting anything.
         var descriptor = FetchDescriptor<StoredDeck>()
         descriptor.fetchLimit = 1
-        guard try context.fetch(descriptor).isEmpty else { return }
+        let isEmpty = try context.fetch(descriptor).isEmpty
 
-        context.insert(StoredDeck(from: DeckModel.sampleTestimonialDeck(now: now)))
-        try context.save()
+        if isEmpty {
+            context.insert(StoredDeck(from: DeckModel.sampleTestimonialDeck(now: now)))
+            try context.save()
+        }
+        // Only record success after the write, so a failed save retries next launch.
+        defaults.set(true, forKey: Self.hasSeededSampleKey)
     }
 }
 
@@ -80,8 +98,24 @@ final class SwiftDataRecordingRepository: RecordingRepository {
         return try context.fetch(descriptor).map { $0.toModel() }
     }
 
+    /// Inserts or updates by identifier.
+    ///
+    /// Upsert rather than insert, because a session persists its outcome once
+    /// when it ends and may persist it again after a late reconciliation (a
+    /// file finalised after an interruption). Inserting twice would leave the
+    /// library showing the same interview two ways.
     func save(_ recording: InterviewRecordingModel) async throws {
-        context.insert(StoredRecording(from: recording))
+        let identifier = recording.id
+        var descriptor = FetchDescriptor<StoredRecording>(
+            predicate: #Predicate { $0.identifier == identifier }
+        )
+        descriptor.fetchLimit = 1
+
+        if let existing = try context.fetch(descriptor).first {
+            existing.update(from: recording)
+        } else {
+            context.insert(StoredRecording(from: recording))
+        }
         try context.save()
     }
 

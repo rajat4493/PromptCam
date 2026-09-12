@@ -187,6 +187,7 @@ final class TestRecordingStore: RecordingStore, @unchecked Sendable {
             .appendingPathComponent("PromptCamTests-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: recordingsDirectory, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: recoveryDirectory, withIntermediateDirectories: true)
     }
 
     deinit {
@@ -195,7 +196,11 @@ final class TestRecordingStore: RecordingStore, @unchecked Sendable {
 
     var recordingsDirectory: URL { root.appendingPathComponent("Recordings", isDirectory: true) }
     var temporaryDirectory: URL { root.appendingPathComponent("Temp", isDirectory: true) }
+    var recoveryDirectory: URL { root.appendingPathComponent("Recovery", isDirectory: true) }
     var recordingsDirectoryPath: String { recordingsDirectory.path }
+
+    /// When set, `preserveForRecovery` throws, leaving the file where it was.
+    var preserveError: RecordingStoreError?
 
     func makeTemporaryPath() throws -> String {
         temporaryDirectory.appendingPathComponent("capture-\(UUID().uuidString).mov").path
@@ -215,13 +220,53 @@ final class TestRecordingStore: RecordingStore, @unchecked Sendable {
         return StoredRecording(path: destination.path, fileName: fileName)
     }
 
-    func cleanUpAbandonedTemporaryFiles() throws {
-        let contents = try FileManager.default.contentsOfDirectory(atPath: temporaryDirectory.path)
-        for entry in contents {
-            try FileManager.default.removeItem(
-                at: temporaryDirectory.appendingPathComponent(entry)
-            )
+    func preserveForRecovery(temporaryPath: String) throws -> String {
+        guard FileManager.default.fileExists(atPath: temporaryPath) else {
+            throw RecordingStoreError.temporaryFileMissing
         }
+        if let preserveError { throw preserveError }
+
+        let source = URL(fileURLWithPath: temporaryPath)
+        if source.deletingLastPathComponent().standardizedFileURL
+            == recoveryDirectory.standardizedFileURL {
+            return temporaryPath
+        }
+        let destination = recoveryDirectory
+            .appendingPathComponent("Recovered-\(UUID().uuidString).mov")
+        try FileManager.default.moveItem(at: source, to: destination)
+        return destination.path
+    }
+
+    func preservedFileExists(atPath path: String) -> Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
+    func cleanUpAbandonedTemporaryFiles(
+        excluding activePaths: Set<String>,
+        olderThan age: TimeInterval
+    ) throws {
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: temporaryDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )
+        let cutoff = Date().addingTimeInterval(-age)
+        let active = Set(activePaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+
+        for url in contents {
+            guard !active.contains(url.standardizedFileURL.path) else { continue }
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate
+            guard let modified, modified < cutoff else { continue }
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// Backdates a file so age-based cleanup can be tested without waiting.
+    func backdate(path: String, by seconds: TimeInterval) throws {
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(-seconds)],
+            ofItemAtPath: path
+        )
     }
 
     /// Creates a stand-in captured file so store paths can be exercised.
