@@ -2,94 +2,85 @@ import Foundation
 import Observation
 import PromptCamCore
 
-/// Orchestrates one interview: the async glue around `InterviewSessionEngine`.
+/// SwiftUI's view of one interview.
 ///
 /// STATICALLY_REVIEWED — REQUIRES_MAC.
 ///
-/// ## Division of responsibility
+/// ## Deliberately thin
 ///
-/// The engine owns *what is true*. This class owns *when things happen*: it
-/// drives the countdown and elapsed-time timers, consumes the capture event
-/// stream, moves files, and persists the result. It holds no business rules of
-/// its own — every state change goes through the engine, so the rules stay in
-/// the layer that has tests.
+/// All orchestration lives in `InterviewSessionCoordinator` in `PromptCamCore`,
+/// because that is the layer that can be tested. This class does exactly three
+/// things the Core layer cannot:
 ///
-/// ## Capture lifecycle, and the three races it has to survive
+///  1. schedules the timers the coordinator's timeout methods need,
+///  2. consumes the capture event stream,
+///  3. mirrors coordinator state into `@Observable` stored properties so
+///     SwiftUI re-renders.
 ///
-/// 1. **Stop before capture has actually started.** The engine enters
-///    `.recording` when the operator taps record, but AVFoundation does not
-///    begin writing until `didStartRecording` fires. A stop in that window used
-///    to reach an output that was not yet recording, so nothing happened and
-///    the session sat in `.finishing` forever. Stop is now *queued* until
-///    capture is confirmed, and a watchdog fails the session if capture never
-///    starts at all.
-/// 2. **A file finishing after the session already ended.** An interruption
-///    brings the session to rest, and AVFoundation may still deliver a
-///    completed file afterwards. `finalise` is the single, idempotent
-///    reconciliation point: it never claims a save for a session that already
-///    ended, it moves the file somewhere persistent, and it updates the library
-///    row the session already wrote.
-/// 3. **A second finalisation.** `hasFinalised` makes every path after the
-///    first a no-op, so a failure followed by a completion (or two completions)
-///    cannot double-file or double-persist.
+/// **No decision about recording belongs here.** If you find yourself adding an
+/// `if` about state, files or failures, it belongs in the coordinator with a
+/// test beside it — that separation is what the recording-lifecycle defects
+/// came from lacking.
 @MainActor
 @Observable
 final class DirectorSessionModel {
 
-    // MARK: - Observable state
+    // MARK: - Mirrored state
+    //
+    // Stored rather than computed: `@Observable` tracks stored-property access,
+    // and the coordinator is a plain class it cannot observe.
 
-    /// The single source of truth. Both surfaces read from here.
-    private(set) var engine: InterviewSessionEngine
-
-    /// Recomputed on a timer while recording, so the view has something to observe.
+    private(set) var state: RecordingState = .idle
     private(set) var elapsed: TimeInterval = 0
+    private(set) var alert: SessionAlertContent?
+    private(set) var audioLevel: Double = 0
+    private(set) var markerCount: Int = 0
+    private(set) var currentQuestion: String?
+    private(set) var nextQuestion: String?
+    private(set) var questionPosition: String = ""
+    private(set) var subjectSnapshot: SubjectSnapshot = .empty
+    private(set) var showsSubjectControls = false
+    private(set) var canAddMarker = false
+    private(set) var canStartRecording = false
+    private(set) var canStopRecording = false
+    private(set) var canGoToNextQuestion = false
+    private(set) var canGoToPreviousQuestion = false
+    private(set) var blocksDismissal = false
+    private(set) var completedRecording: InterviewRecordingModel?
 
-    /// Whether the operator has switched the subject surface on. Bound directly
-    /// into the scene accessory.
+    /// Whether the operator has switched the subject surface on.
     var isSubjectAccessoryEnabled: Bool = true
-
-    /// Set when something needs the operator's attention.
-    private(set) var alert: SessionAlert?
 
     /// Fold position, when the platform reports it. Used only to warn.
     private(set) var foldPosition: FoldPosition = .unknown
 
-    /// The recording that was just completed, for the review screen.
-    private(set) var completedRecording: InterviewRecordingModel?
+    /// Exposed for the few places the view needs configuration rather than state.
+    let flags: FeatureFlags
+
+    var formattedElapsed: String { MarkerExporter.shortTimecode(elapsed) }
+
+    var foldWarning: String? {
+        guard foldPosition.mayObscureControls, !state.isCapturing else { return nil }
+        return "The device is partly folded. Open it fully so the controls stay clear of the hinge."
+    }
 
     // MARK: - Dependencies
 
+    private let coordinator: InterviewSessionCoordinator
     private let captureService: any CaptureService
-    private let store: RecordingFileStore
-    private let recordings: any RecordingRepository
-    private let clock: any SessionClock
     private let permissions: AVPermissionService
 
     private var captureTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
     private var tickerTask: Task<Void, Never>?
     private var startupWatchdogTask: Task<Void, Never>?
+    private var finalisationTask: Task<Void, Never>?
 
-    // MARK: - Capture lifecycle flags
-
-    /// True once AVFoundation has confirmed the first byte is on disk.
-    private var hasCaptureStarted = false
-    /// True when the operator asked to stop before capture was confirmed.
-    private var stopRequestedBeforeStart = false
-    /// Guards `finalise` so it runs exactly once per take.
-    private var hasFinalised = false
-    /// The capture in flight, so the sweeper can be told to leave it alone.
-    private var activeTemporaryPath: String?
-
-    /// The countdown length. Three seconds is long enough for the subject to
-    /// look up and short enough not to feel like waiting.
-    private let countdownSeconds = 3
-
-    /// How long to wait for `didStartRecording` before giving up.
-    ///
-    /// Without this, a capture that never starts leaves the session stuck in
-    /// `.finishing` with no way out and no explanation.
+    /// How long to wait for the platform to confirm capture has begun.
     private let captureStartTimeout: Duration = .seconds(8)
+    /// How long to wait for a completion callback before preserving the file
+    /// anyway. The bounded backstop described in the coordinator.
+    private let finalisationTimeout: Duration = .seconds(10)
 
     init(
         deckName: String,
@@ -98,269 +89,158 @@ final class DirectorSessionModel {
         capabilities: DeviceCapabilities,
         flags: FeatureFlags,
         captureService: any CaptureService,
-        store: RecordingFileStore,
+        store: any RecordingStore,
         recordings: any RecordingRepository,
         permissions: AVPermissionService,
         clock: any SessionClock = SystemSessionClock()
     ) {
-        self.engine = InterviewSessionEngine(
+        self.flags = flags
+        self.captureService = captureService
+        self.permissions = permissions
+        self.coordinator = InterviewSessionCoordinator(
             deckName: deckName,
             questions: questions,
+            displayOptions: displayOptions,
             capabilities: capabilities,
             flags: flags,
-            displayOptions: displayOptions,
-            captureDirection: .rear
+            captureService: captureService,
+            store: store,
+            recordings: recordings,
+            clock: clock
         )
-        self.captureService = captureService
-        self.store = store
-        self.recordings = recordings
-        self.permissions = permissions
-        self.clock = clock
-    }
-
-    // MARK: - Derived view state
-
-    var state: RecordingState { engine.state }
-    var currentQuestion: String? { engine.currentQuestion }
-    var nextQuestion: String? { engine.nextQuestion }
-    var questionPosition: String {
-        guard engine.questionCount > 0 else { return "No questions" }
-        return "\(engine.currentQuestionIndex + 1) of \(engine.questionCount)"
-    }
-    var audioLevel: Double { engine.audioLevel }
-    var markerCount: Int { engine.markers.count }
-    var showsSubjectControls: Bool { engine.showsSubjectDisplayControls }
-    var subjectSnapshot: SubjectSnapshot { engine.subjectSnapshot() }
-    var formattedElapsed: String { MarkerExporter.shortTimecode(elapsed) }
-
-    /// Blocks swipe-to-dismiss and the close button while a take is live.
-    var blocksDismissal: Bool { engine.shouldBlockDismissal }
-
-    var canStartRecording: Bool {
-        engine.canApply(.beginRecording) || engine.canApply(.startCountdown(seconds: countdownSeconds))
-    }
-    /// Stop stays available during the pre-start window — the request is queued
-    /// rather than dropped, so the button must not be disabled there.
-    var canStopRecording: Bool { engine.canApply(.stop) }
-    var canAddMarker: Bool { state.isCapturing }
-
-    /// A warning to show before rolling, rather than an interruption during.
-    var foldWarning: String? {
-        guard foldPosition.mayObscureControls, !state.isCapturing else { return nil }
-        return "The device is partly folded. Open it fully so the controls stay clear of the hinge."
+        refresh()
     }
 
     // MARK: - Lifecycle
 
-    /// Checks permission, sweeps genuinely abandoned captures, configures capture.
     func begin() async {
-        // Sweep only captures that are old AND not in use. This used to delete
-        // every file in the capture directory, which destroyed the very
-        // recordings the app had promised to keep.
-        try? store.cleanUpAbandonedTemporaryFiles(
-            excluding: activeTemporaryPath.map { [$0] } ?? [],
-            olderThan: RecordingFileStore.abandonedCaptureAge
-        )
-
-        let snapshot = await permissions.snapshot()
-        guard snapshot.canRecord else {
-            // Enter `.preparing` first so the failure is a legal transition and
-            // the UI has a specific cause to explain.
-            try? engine.prepare()
-            if let failure = snapshot.blockingFailure {
-                applyFailure(failure)
-            }
-            return
-        }
-
         startConsumingCaptureEvents()
-
-        do {
-            try engine.prepare()
-        } catch {
-            // Already prepared: harmless, and not worth surfacing.
-            return
-        }
-        await captureService.prepare(direction: engine.captureDirection)
+        await coordinator.begin(permissions: await permissions.snapshot())
+        refresh()
     }
 
-    /// Releases the camera and stops every timer.
-    ///
-    /// Clears `captureTask` as well as cancelling it, so a later `begin()` can
-    /// subscribe again instead of silently refusing to.
     func end() async {
         countdownTask?.cancel(); countdownTask = nil
         tickerTask?.cancel(); tickerTask = nil
         startupWatchdogTask?.cancel(); startupWatchdogTask = nil
+        finalisationTask?.cancel(); finalisationTask = nil
 
-        await captureService.tearDown()
+        await coordinator.end()
 
         captureTask?.cancel()
         captureTask = nil
+        refresh()
     }
 
     // MARK: - Operator actions
 
-    /// Record button. Starts a countdown, or rolls immediately if the countdown
-    /// has already finished.
     func tapRecord() {
-        // Both branches ask the engine whether the move is legal, so a fast
-        // double-tap is absorbed here and would be rejected again by the engine
-        // even if it were not. From `.recording` or `.finishing` neither is
-        // legal and the tap does nothing.
-        if engine.canApply(.startCountdown(seconds: countdownSeconds)) {
-            startCountdown()
-        } else if engine.canApply(.beginRecording) {
-            beginCapture()
+        Task {
+            let startedCountdown = await coordinator.tapRecord()
+            refresh()
+            if startedCountdown {
+                scheduleCountdown()
+            } else if state.isCapturing {
+                startCaptureTimers()
+            }
         }
     }
 
     func tapStop() {
-        guard engine.canApply(.stop) else { return }
-        do {
-            try engine.stop()
-        } catch {
-            return
+        Task {
+            await coordinator.tapStop()
+            tickerTask?.cancel()
+            refresh()
+            // Stop does not mean the file is ready; arm the backstop in case the
+            // completion callback never arrives.
+            scheduleFinalisationTimeout()
         }
-        tickerTask?.cancel()
-
-        guard hasCaptureStarted else {
-            // Capture has not actually begun, so asking the output to stop
-            // would do nothing and the session would hang in `.finishing`.
-            // Remember the request; `.recordingStarted` honours it immediately.
-            stopRequestedBeforeStart = true
-            return
-        }
-        Task { await captureService.stopRecording() }
     }
 
     func cancelCountdown() {
         countdownTask?.cancel()
         countdownTask = nil
-        try? engine.cancelCountdown()
+        coordinator.cancelCountdown()
+        refresh()
     }
 
     func addMarker() {
-        _ = engine.addMarker(at: clock.now)
+        _ = coordinator.addMarker()
+        refresh()
     }
 
-    func nextQuestionTapped() { engine.goToNextQuestion(at: clock.now) }
-    func previousQuestionTapped() { engine.goToPreviousQuestion(at: clock.now) }
-    func selectQuestion(at index: Int) { engine.goToQuestion(index, at: clock.now) }
-    func updateDisplayOptions(_ options: SubjectDisplayOptions) { engine.updateDisplayOptions(options) }
-    func dismissAlert() { alert = nil }
+    func nextQuestionTapped() { _ = coordinator.goToNextQuestion(); refresh() }
+    func previousQuestionTapped() { _ = coordinator.goToPreviousQuestion(); refresh() }
+    func selectQuestion(at index: Int) { _ = coordinator.goToQuestion(index); refresh() }
 
-    /// Clears a finished take so another can be recorded with the same deck.
+    func updateDisplayOptions(_ options: SubjectDisplayOptions) {
+        coordinator.updateDisplayOptions(options)
+        refresh()
+    }
+
+    func dismissAlert() {
+        coordinator.dismissAlert()
+        refresh()
+    }
+
     func startAnotherTake() async {
-        completedRecording = nil
-        hasCaptureStarted = false
-        stopRequestedBeforeStart = false
-        hasFinalised = false
-        activeTemporaryPath = nil
-        try? engine.reset()
+        coordinator.reset()
+        refresh()
         await begin()
     }
 
-    // MARK: - Accessory callbacks
-    //
-    // The system is the only source of availability truth; these are the only
-    // places that set it.
+    // MARK: - Accessory and hinge callbacks
 
     func subjectAccessoryAvailabilityChanged(_ isAvailable: Bool) {
-        if isAvailable {
-            // Preserve `.presented` if content is already on screen.
-            if engine.subjectAvailability != .presented {
-                engine.updateSubjectAvailability(.availableNotEnabled)
-            }
-        } else {
-            engine.updateSubjectAvailability(.unavailable)
-        }
+        coordinator.updateSubjectAvailability(
+            isAvailable
+                ? (subjectSnapshotIsPresented ? .presented : .availableNotEnabled)
+                : .unavailable
+        )
+        refresh()
     }
 
     func subjectAccessoryPresentationChanged(_ isPresented: Bool) {
         // Losing the subject surface never stops the interview.
-        engine.updateSubjectAvailability(isPresented ? .presented : .unavailable)
+        coordinator.updateSubjectAvailability(isPresented ? .presented : .unavailable)
+        refresh()
     }
 
     func foldPositionChanged(_ position: FoldPosition) {
         foldPosition = position
     }
 
-    // MARK: - Countdown
+    private var subjectSnapshotIsPresented: Bool {
+        coordinator.engine.subjectAvailability == .presented
+    }
 
-    private func startCountdown() {
-        do {
-            try engine.startCountdown(seconds: countdownSeconds)
-        } catch {
-            return
-        }
+    // MARK: - Timers
+    //
+    // The only genuinely platform-specific part of orchestration: turning
+    // wall-clock time into calls the coordinator can be tested against.
 
+    private func scheduleCountdown() {
         countdownTask?.cancel()
         countdownTask = Task { [weak self] in
-            while true {
+            while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }
                 guard let self else { return }
 
-                // A cancel that raced this tick leaves the engine out of
-                // countdown, and the tick is simply rejected.
-                guard self.state.countdownRemaining != nil else { return }
-                try? self.engine.tickCountdown()
-
-                if self.state.countdownRemaining == 0 {
-                    self.beginCapture()
+                let began = await self.coordinator.countdownTick()
+                self.refresh()
+                if began {
+                    self.startCaptureTimers()
                     return
                 }
+                if self.state.countdownRemaining == nil { return }
             }
         }
     }
 
-    // MARK: - Capture
-
-    private func beginCapture() {
-        guard engine.canApply(.beginRecording) else { return }
-
-        let temporaryPath: String
-        do {
-            temporaryPath = try store.makeTemporaryPath()
-        } catch {
-            applyFailure(.captureFailed("A file could not be created for this recording."))
-            return
-        }
-
-        do {
-            try engine.beginRecording(at: clock.now, temporaryPath: temporaryPath)
-        } catch {
-            return
-        }
-
-        hasCaptureStarted = false
-        stopRequestedBeforeStart = false
-        hasFinalised = false
-        activeTemporaryPath = temporaryPath
-
+    private func startCaptureTimers() {
         startTicker()
-        startStartupWatchdog()
-        Task { await captureService.startRecording(toPath: temporaryPath) }
-    }
-
-    /// Fails the session if capture never actually starts.
-    ///
-    /// Without this a pipeline that accepts `startRecording` but never reports
-    /// `didStartRecording` leaves the operator staring at a running timer that
-    /// is recording nothing.
-    private func startStartupWatchdog() {
-        startupWatchdogTask?.cancel()
-        startupWatchdogTask = Task { [weak self] in
-            try? await Task.sleep(for: self?.captureStartTimeout ?? .seconds(8))
-            if Task.isCancelled { return }
-            guard let self, !self.hasCaptureStarted else { return }
-            guard self.state.isCapturing || self.state == .finishing else { return }
-
-            self.applyFailure(
-                .captureFailed("The camera did not start recording. Nothing was captured.")
-            )
-        }
+        scheduleStartupWatchdog()
     }
 
     private func startTicker() {
@@ -368,13 +248,41 @@ final class DirectorSessionModel {
         tickerTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                self.elapsed = self.engine.duration(now: self.clock.now)
-                // Twice a second: the timer shows whole seconds, and this keeps
-                // it from visibly lagging without waking constantly.
+                self.coordinator.refreshElapsed()
+                self.elapsed = self.coordinator.elapsed
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }
+
+    private func scheduleStartupWatchdog() {
+        startupWatchdogTask?.cancel()
+        startupWatchdogTask = Task { [weak self] in
+            try? await Task.sleep(for: self?.captureStartTimeout ?? .seconds(8))
+            if Task.isCancelled { return }
+            guard let self else { return }
+
+            await self.coordinator.captureStartTimedOut()
+            self.tickerTask?.cancel()
+            self.refresh()
+            // The coordinator has asked the pipeline to stop; give the
+            // completion callback a bounded window before preserving the file.
+            self.scheduleFinalisationTimeout()
+        }
+    }
+
+    private func scheduleFinalisationTimeout() {
+        finalisationTask?.cancel()
+        finalisationTask = Task { [weak self] in
+            try? await Task.sleep(for: self?.finalisationTimeout ?? .seconds(10))
+            if Task.isCancelled { return }
+            guard let self else { return }
+            await self.coordinator.finalisationTimedOut()
+            self.refresh()
+        }
+    }
+
+    // MARK: - Capture events
 
     private func startConsumingCaptureEvents() {
         guard captureTask == nil else { return }
@@ -382,248 +290,53 @@ final class DirectorSessionModel {
             guard let self else { return }
             for await event in self.captureService.events {
                 if Task.isCancelled { return }
-                await self.handle(event)
+                await self.coordinator.handle(event)
+
+                switch event {
+                case .recordingStarted:
+                    self.startupWatchdogTask?.cancel()
+                    self.startupWatchdogTask = nil
+                case .recordingFinished, .recordingFailed:
+                    self.finalisationTask?.cancel()
+                    self.finalisationTask = nil
+                    self.tickerTask?.cancel()
+                case .runtimeError, .interrupted:
+                    self.tickerTask?.cancel()
+                    self.scheduleFinalisationTimeout()
+                default:
+                    break
+                }
+                self.refresh()
             }
         }
     }
 
-    private func handle(_ event: CaptureEvent) async {
-        switch event {
-        case .ready:
-            try? engine.markPrepared()
+    // MARK: - Mirroring
 
-        case .configurationFailed(let failure):
-            applyFailure(failure)
-
-        case .recordingStarted:
-            hasCaptureStarted = true
-            startupWatchdogTask?.cancel()
-            startupWatchdogTask = nil
-            // Rebase the timeline onto the real first byte so every marker
-            // offset matches the finished file.
-            engine.noteCaptureStarted(at: clock.now)
-
-            if stopRequestedBeforeStart {
-                // The operator asked to stop during the start-up window. Honour
-                // it now that there is actually something to stop.
-                stopRequestedBeforeStart = false
-                await captureService.stopRecording()
-            }
-
-        case .recordingFinished(let path, let duration):
-            await finalise(temporaryPath: path, duration: duration)
-
-        case .recordingFailed(let failure):
-            await finaliseFailure(failure)
-
-        case .interrupted(let reason):
-            await applyInterruption(reason)
-
-        case .interruptionEnded:
-            // Deliberately does not resume automatically. Restarting capture
-            // without the operator asking would produce a second file they did
-            // not intend and did not see begin.
-            break
-
-        case .audioLevel(let level):
-            engine.applyAudioLevel(level)
-        }
-    }
-
-    // MARK: - Finalisation
-    //
-    // One idempotent entry point per take. Everything that ends a capture comes
-    // through here so a late callback cannot contradict a session that has
-    // already come to rest.
-
-    /// The operating system finalised a file.
-    private func finalise(temporaryPath: String, duration: TimeInterval) async {
-        guard !hasFinalised else { return }
-        hasFinalised = true
-
-        tickerTask?.cancel()
-        startupWatchdogTask?.cancel()
-
-        switch engine.state {
-        case .finishing:
-            await storeAndConfirm(temporaryPath: temporaryPath, duration: duration)
-
-        case .recording:
-            // Capture ended without the operator asking — the output stopped
-            // itself. Route through the normal stop so the state machine stays
-            // legal, then file it like any other completed take.
-            try? engine.stop()
-            await storeAndConfirm(temporaryPath: temporaryPath, duration: duration)
-
-        default:
-            // The session already ended (interrupted, or failed) and the file
-            // arrived afterwards. It is NOT a successful take and must not be
-            // reported as saved. Move it somewhere persistent and attach it to
-            // the row already written, so the operator can recover it.
-            await reconcileLateFile(temporaryPath: temporaryPath, duration: duration)
-        }
-    }
-
-    /// Capture ended without producing a usable file.
-    private func finaliseFailure(_ failure: RecordingFailure) async {
-        guard !hasFinalised else { return }
-        hasFinalised = true
-
-        tickerTask?.cancel()
-        startupWatchdogTask?.cancel()
-
-        // Whatever partial file exists belongs to the operator. Move it out of
-        // the sweeper's reach before reporting.
-        let preserved = preserveActiveCapture()
-        let elapsedNow = engine.duration(now: clock.now)
-
-        if engine.canApply(.fail(failure)) {
-            try? engine.fail(failure, duration: elapsedNow)
-            engine.attachRecoveredFile(path: preserved, duration: elapsedNow)
-        } else {
-            engine.attachRecoveredFile(path: preserved, duration: elapsedNow)
-        }
-
-        alert = SessionAlert(
-            title: "Recording problem",
-            message: failure.operatorMessage + recoveryClause(for: preserved),
-            offersSettings: false
-        )
-        await persistResult()
-    }
-
-    /// Moves a confirmed capture into permanent storage, then — and only then —
-    /// claims the save.
-    private func storeAndConfirm(temporaryPath: String, duration: TimeInterval) async {
-        let startedAt = engine.captureStartedAt ?? clock.now
-        do {
-            let stored = try store.store(temporaryPath: temporaryPath, startedAt: startedAt)
-            try engine.confirmSaved(fileName: stored.fileName, duration: duration)
-            activeTemporaryPath = nil
-        } catch {
-            // Filing failed. The capture is still at its temporary path, so move
-            // it somewhere the sweeper cannot reach and record where it went.
-            let reason = (error as? RecordingStoreError)?.reasonText ?? error.localizedDescription
-            let preserved = preserveActiveCapture(fallbackPath: temporaryPath)
-
-            try? engine.failSave(reason: reason, preservedPath: preserved, duration: duration)
-            engine.attachRecoveredFile(path: preserved, duration: duration)
-
-            alert = SessionAlert(
-                title: "Could not file the interview",
-                message: reason + recoveryClause(for: preserved),
-                offersSettings: false
-            )
-        }
-        await persistResult()
-    }
-
-    /// Handles a file that finished after the session already ended.
+    /// Copies coordinator state into the observable properties.
     ///
-    /// Never claims a save. Updates the existing library row so the interview is
-    /// recoverable rather than orphaned on disk with nothing pointing at it.
-    private func reconcileLateFile(temporaryPath: String, duration: TimeInterval) async {
-        let preserved = preserveActiveCapture(fallbackPath: temporaryPath)
-        engine.attachRecoveredFile(path: preserved, duration: duration)
-        await persistResult()
+    /// Called after every interaction. Cheap — all value reads — and keeps a
+    /// single place where the view's idea of the session is refreshed.
+    private func refresh() {
+        let engine = coordinator.engine
+        state = coordinator.state
+        elapsed = coordinator.elapsed
+        alert = coordinator.alert
+        audioLevel = engine.audioLevel
+        markerCount = engine.markers.count
+        currentQuestion = engine.currentQuestion
+        nextQuestion = engine.nextQuestion
+        questionPosition = engine.questionCount > 0
+            ? "\(engine.currentQuestionIndex + 1) of \(engine.questionCount)"
+            : "No questions"
+        subjectSnapshot = coordinator.subjectSnapshot
+        showsSubjectControls = engine.showsSubjectDisplayControls
+        canAddMarker = coordinator.canAddMarker
+        canStartRecording = coordinator.canStartRecording
+        canStopRecording = coordinator.canStopRecording
+        canGoToNextQuestion = engine.canGoToNextQuestion
+        canGoToPreviousQuestion = engine.canGoToPreviousQuestion
+        blocksDismissal = coordinator.blocksDismissal
+        completedRecording = coordinator.persistedRecording
     }
-
-    /// Moves the in-flight capture into the recovery directory.
-    ///
-    /// Returns the path the file actually occupies afterwards — the recovery
-    /// path on success, the original path if the move failed but the file is
-    /// still there, or `nil` if there is no file at all. Never reports a path
-    /// that does not exist.
-    private func preserveActiveCapture(fallbackPath: String? = nil) -> String? {
-        guard let candidate = fallbackPath ?? activeTemporaryPath ?? engine.temporaryCapturePath else {
-            return nil
-        }
-        if let recovered = try? store.preserveForRecovery(temporaryPath: candidate) {
-            activeTemporaryPath = nil
-            return recovered
-        }
-        return store.preservedFileExists(atPath: candidate) ? candidate : nil
-    }
-
-    private func recoveryClause(for preservedPath: String?) -> String {
-        preservedPath == nil
-            ? " No video file survived."
-            : " The video that was captured has been kept, and you can recover it from the interview's details."
-    }
-
-    private func applyFailure(_ failure: RecordingFailure, duration: TimeInterval = 0) {
-        tickerTask?.cancel()
-        countdownTask?.cancel()
-        startupWatchdogTask?.cancel()
-
-        guard engine.canApply(.fail(failure)) else { return }
-        try? engine.fail(failure, duration: duration)
-
-        let preserved = preserveActiveCapture()
-        engine.attachRecoveredFile(path: preserved, duration: duration)
-
-        alert = SessionAlert(
-            title: "Recording problem",
-            message: failure.operatorMessage,
-            offersSettings: failure == .cameraPermissionDenied || failure == .microphonePermissionDenied
-        )
-        Task { await persistResult() }
-    }
-
-    private func applyInterruption(_ reason: InterruptionReason) async {
-        guard engine.canApply(.interrupt(reason)) else { return }
-        tickerTask?.cancel()
-        countdownTask?.cancel()
-
-        let wasCapturing = state.isCapturing
-        try? engine.interrupt(reason, at: clock.now)
-
-        alert = SessionAlert(
-            title: "Recording interrupted",
-            message: reason.operatorMessage + " Any video captured so far has been kept.",
-            offersSettings: false
-        )
-        await persistResult()
-
-        if wasCapturing {
-            // Ask the pipeline to finalise what it has. The completion callback
-            // arrives after the session is already terminal, and `finalise`
-            // routes it to `reconcileLateFile` — which preserves the file and
-            // updates this row rather than claiming a save.
-            await captureService.stopRecording()
-        }
-    }
-
-    /// Writes the outcome to the library.
-    ///
-    /// Every terminal outcome is recorded, including failures and
-    /// interruptions, so a lost interview leaves a trace the operator can act
-    /// on rather than vanishing. The snapshot carries a stable identifier, so
-    /// calling this again after a late reconciliation updates the same row.
-    private func persistResult() async {
-        guard let snapshot = engine.resultSnapshot() else { return }
-        let model = snapshot.makeRecordingModel()
-        do {
-            try await recordings.save(model)
-            completedRecording = model
-        } catch {
-            alert = SessionAlert(
-                title: "Could not update the library",
-                message: "The interview details could not be filed. "
-                    + (model.fileName != nil
-                        ? "The video itself was saved."
-                        : "Check the recordings folder for the captured file."),
-                offersSettings: false
-            )
-        }
-    }
-}
-
-/// Something the operator has to be told.
-struct SessionAlert: Identifiable, Equatable {
-    let id = UUID()
-    let title: String
-    let message: String
-    /// Whether an "Open Settings" button is useful for this problem.
-    let offersSettings: Bool
 }

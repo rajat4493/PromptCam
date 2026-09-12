@@ -321,6 +321,17 @@ struct DurationTests {
         #expect(engine.duration(now: Date()) == 0)
     }
 
+    @Test("Duration stays zero during the capture start-up window")
+    func durationZeroUntilConfirmed() throws {
+        let clock = ManualSessionClock()
+        let engine = try InterviewSessionEngine.recordingPendingConfirmation(startedAt: clock.now)
+
+        clock.advance(by: 6)
+        // The state is `.recording`, but nothing is being written, so a timer
+        // counting up would be telling the operator a comfortable lie.
+        #expect(engine.duration(now: clock.now) == 0)
+    }
+
     @Test("Duration freezes at the confirmed value after saving")
     func durationFreezesAfterSave() throws {
         let clock = ManualSessionClock()

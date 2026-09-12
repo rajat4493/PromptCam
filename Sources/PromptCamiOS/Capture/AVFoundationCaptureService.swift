@@ -323,9 +323,24 @@ final class AVFoundationCaptureService: NSObject, CaptureService, @unchecked Sen
 
     @objc private func sessionRuntimeError(_ notification: Notification) {
         let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
-        continuation.yield(
-            .recordingFailed(.captureFailed(error?.localizedDescription ?? "The camera reported an error."))
+        let failure = RecordingFailure.captureFailed(
+            error?.localizedDescription ?? "The camera reported an error."
         )
+
+        // `.runtimeError`, NOT `.recordingFailed`: the movie output may still be
+        // writing. The session must not move or share the file until
+        // `didFinishRecordingTo` arrives. Ask the output to stop so that
+        // callback actually comes.
+        continuation.yield(.runtimeError(failure))
+
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if self.movieOutput.isRecording {
+                self.movieOutput.stopRecording()
+            } else if self.currentOutputURL != nil {
+                self.stopRequestedBeforeStart = true
+            }
+        }
     }
 
     @objc private func audioSessionInterrupted(_ notification: Notification) {

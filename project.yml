@@ -36,6 +36,11 @@ options:
 configs:
   Debug: debug
   Duo: debug
+  # Production-equivalent Duo build. Exists because a Duo scheme that only ever
+  # builds a Debug-like configuration cannot be archived: Archive defaults to
+  # the release configuration, which would silently ship WITHOUT the Duo code
+  # paths — an App Store build missing the headline feature.
+  DuoRelease: release
   Release: release
 
 settings:
@@ -61,6 +66,7 @@ targets:
     configFiles:
       Debug: Support/Signing.xcconfig
       Duo: Support/Signing.xcconfig
+      DuoRelease: Support/Signing.xcconfig
       Release: Support/Signing.xcconfig
     sources:
       - path: Sources/PromptCamiOS
@@ -121,6 +127,10 @@ targets:
           # docs/APPLE_API_CORRECTIONS.md and docs/MAC_VALIDATION.md step 8.
           # Add PROMPTCAM_USE_ARRANGEMENT_VIEW to also trial ArrangementView.
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG PROMPTCAM_DUO
+        DuoRelease:
+          # What actually ships once the Duo APIs are validated. Optimised like
+          # Release, but with the Duo code paths compiled in.
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: PROMPTCAM_DUO
         Release:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
 
@@ -141,9 +151,20 @@ schemes:
 
   # iPhone Duo: the differentiated experience. Select this scheme to build the
   # subject-facing accessory, reserved-region layout and hinge observation.
+  #
+  # Archive is pinned to DuoRelease. Without that pin, archiving this scheme
+  # would produce a Release build with PROMPTCAM_DUO undefined — an App Store
+  # submission missing the entire Duo feature, with nothing to indicate it.
+  # Verify after archiving: the build log must show -DPROMPTCAM_DUO.
   PromptCam (Duo):
     build:
       targets:
         PromptCam: all
     run:
       config: Duo
+    profile:
+      config: DuoRelease
+    analyze:
+      config: Duo
+    archive:
+      config: DuoRelease

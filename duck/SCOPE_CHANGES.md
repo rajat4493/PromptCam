@@ -35,6 +35,11 @@ multiple themes. **Nothing on the exclusion list was added.**
 | SC-15 | `hasSeededSample` flag persisted | Review: seeding on "is the database empty?" resurrected a deliberately deleted sample deck | Product owner (review) |
 | SC-16 | `docs/SDK_CAPABILITY_REPORT.md` rewritten | Review: its executive summary asserted that real APIs do not exist — dangerous context for a future coding agent | Product owner (review) |
 | SC-17 | This `/duck` ledger created | Review: TheDuck rules require the milestone ledger under `/duck`, not only long-form docs under `/docs` | Product owner (review) |
+| SC-18 | **Orchestration moved from the iOS layer into `PromptCamCore`** as `InterviewSessionCoordinator`; `DirectorSessionModel` reduced to mirroring and timer scheduling | Round-2 review: the lifecycle defects lived in code that no test could reach, because it imported SwiftUI and AVFoundation. Moving it behind the existing protocols made the real orchestration testable | Product owner (review) |
+| SC-19 | `CaptureEvent.runtimeError` added, distinct from `recordingFailed` | A runtime error does not mean the writer has finished. Conflating them caused the app to move a file AVFoundation might still be writing, and to discard the completed file that arrived afterwards | Product owner (review) |
+| SC-20 | `DuoRelease` configuration; Duo scheme's Archive and Profile actions pinned to it | Archive defaults to Release, so archiving the Duo scheme would have shipped an App Store build with the headline feature compiled out, silently | Product owner (review) |
+| SC-21 | No timeline event is recorded until capture is confirmed; the opening question is written at offset zero on confirmation | Markers and question changes taken during start-up pointed at no file and were invalidated by the rebase. Gating is simpler and more truthful than rebasing pending events | Product owner (review) |
+| SC-22 | Bounded `finalisationTimedOut` backstop | Reconciliation must stay open after a failure, but not forever — otherwise a completion callback that never arrives means the file is swept and lost | Claude, per review guidance |
 
 ## Proposed and rejected
 

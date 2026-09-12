@@ -11,8 +11,20 @@ public enum CaptureEvent: Equatable, Sendable {
     ///
     /// This is the **only** signal that may lead to a "saved" claim.
     case recordingFinished(path: String, duration: TimeInterval)
-    /// Capture stopped without producing a usable file.
+    /// Capture ended **and the file is closed**, but produced no usable result.
+    ///
+    /// Emitted only from the platform's recording-completion callback. Because
+    /// the file is final, the session may safely move it into recovery.
     case recordingFailed(RecordingFailure)
+    /// The pipeline reported an error **while the file may still be open**.
+    ///
+    /// Distinct from `recordingFailed` on purpose, and the distinction is a
+    /// safety property rather than a nicety: a runtime error does not mean the
+    /// writer has finished. Moving or sharing the file at this point would
+    /// touch something the platform is still writing to, so the session records
+    /// the failed outcome but leaves the file alone and waits for the
+    /// completion callback (or a bounded timeout) before reconciling it.
+    case runtimeError(RecordingFailure)
     /// The system interrupted capture.
     case interrupted(InterruptionReason)
     /// The interruption ended and capture could be resumed.

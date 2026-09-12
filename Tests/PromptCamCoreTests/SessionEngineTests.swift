@@ -87,7 +87,7 @@ struct MarkerTests {
     func rebaseOnConfirmedStart() throws {
         let clock = ManualSessionClock()
         let buttonPress = clock.now
-        var engine = try InterviewSessionEngine.recording(startedAt: buttonPress)
+        var engine = try InterviewSessionEngine.recordingPendingConfirmation(startedAt: buttonPress)
 
         // The pipeline took 400 ms to actually start writing.
         clock.advance(by: 0.4)
@@ -98,6 +98,63 @@ struct MarkerTests {
 
         // 10 s from the first byte, not 10.4 s from the button press.
         #expect(marker?.offset == 10.0)
+    }
+
+    @Test("No marker may be taken during the capture start-up window")
+    func markerRefusedBeforeConfirmation() throws {
+        let clock = ManualSessionClock()
+        var engine = try InterviewSessionEngine.recordingPendingConfirmation(startedAt: clock.now)
+
+        // The state is `.recording`, but nothing has been written yet, so an
+        // offset would point at no file — and would be invalidated by the
+        // rebase that confirmation performs.
+        #expect(engine.state.isCapturing)
+        #expect(engine.isCaptureConfirmed == false)
+        #expect(engine.canAddMarker == false)
+
+        clock.advance(by: 2)
+        #expect(engine.addMarker(at: clock.now) == nil)
+        #expect(engine.markers.isEmpty)
+
+        engine.noteCaptureStarted(at: clock.now)
+        #expect(engine.canAddMarker)
+        #expect(engine.addMarker(at: clock.now) != nil)
+    }
+
+    @Test("Confirmation records the question actually on screen at offset zero")
+    func confirmationRecordsOpeningQuestion() throws {
+        let clock = ManualSessionClock()
+        var engine = try InterviewSessionEngine.recordingPendingConfirmation(
+            questions: ["First", "Second", "Third"],
+            startedAt: clock.now
+        )
+        #expect(engine.questionChanges.isEmpty)
+
+        // The operator moves on during start-up.
+        clock.advance(by: 2)
+        #expect(engine.goToNextQuestion(at: clock.now))
+        #expect(engine.questionChanges.isEmpty, "Nothing is timestamped before there is a file")
+
+        clock.advance(by: 1)
+        engine.noteCaptureStarted(at: clock.now)
+
+        #expect(engine.questionChanges.map(\.offset) == [0])
+        #expect(engine.questionChanges.map(\.text) == ["Second"])
+    }
+
+    @Test("A confirmation arriving after a stop is ignored")
+    func confirmationAfterStopIgnored() throws {
+        let clock = ManualSessionClock()
+        var engine = try InterviewSessionEngine.recording(startedAt: clock.now)
+        let original = engine.captureStartedAt
+        clock.advance(by: 10)
+        try engine.stop()
+
+        clock.advance(by: 30)
+        engine.noteCaptureStarted(at: clock.now)
+
+        // Rebasing now would corrupt every offset already measured.
+        #expect(engine.captureStartedAt == original)
     }
 }
 

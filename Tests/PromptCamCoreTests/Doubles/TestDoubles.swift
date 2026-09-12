@@ -317,6 +317,28 @@ extension InterviewSessionEngine {
         try engine.prepare()
         try engine.markPrepared()
         try engine.beginRecording(at: startedAt, temporaryPath: temporaryPath)
+        // Capture is confirmed at the same instant, which is what opens the
+        // timeline. Tests that care about the start-up window before
+        // confirmation use `recordingPendingConfirmation` instead.
+        engine.noteCaptureStarted(at: startedAt)
+        return engine
+    }
+
+    /// An engine that has begun recording but whose capture the platform has
+    /// **not** yet confirmed — the start-up window where no timeline event may
+    /// be recorded.
+    static func recordingPendingConfirmation(
+        questions: [String] = ["Q1", "Q2", "Q3"],
+        startedAt: Date,
+        temporaryPath: String = "/tmp/promptcam-test.mov"
+    ) throws -> InterviewSessionEngine {
+        var engine = InterviewSessionEngine(
+            deckName: "Test deck",
+            questions: questions
+        )
+        try engine.prepare()
+        try engine.markPrepared()
+        try engine.beginRecording(at: startedAt, temporaryPath: temporaryPath)
         return engine
     }
 }

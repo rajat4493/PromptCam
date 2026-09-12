@@ -17,7 +17,8 @@ PromptCam/
 ├── Sources/
 │   ├── PromptCamCore/            Foundation only. No Apple framework.
 │   │   ├── Model/                DeckModel, QuestionModel, recording models
-│   │   ├── Session/              RecordingState, state machine, engine, snapshots
+│   │   ├── Session/              RecordingState, state machine, engine,
+│   │   │                         coordinator (orchestration), snapshots
 │   │   ├── Services/             Protocols: capture, permissions, store, repos, clock
 │   │   ├── Export/               MarkerExporter (CSV + text)
 │   │   └── Support/              FeatureFlags, DeviceCapabilities
@@ -49,7 +50,8 @@ in Core, and 12 unverified Duo symbols permitted only under `Platform/`.
 |---|---|---|
 | `RecordingStateMachine` | The only place a recording state may change | One exhaustive transition table; `nil` means illegal |
 | `InterviewSessionEngine` | Owns state, question cursor, countdown, timeline, accessory availability | Synchronous value type; no I/O |
-| `DirectorSessionModel` | Async orchestration only — timers, capture stream, file moves, persistence | Contains **no** business rules |
+| `InterviewSessionCoordinator` | **All orchestration**: capture events, file reconciliation, persistence, timeouts | In Core, behind protocols, so it is testable. Timeouts are methods, not internal timers |
+| `DirectorSessionModel` | Schedules timers, consumes the event stream, mirrors state for `@Observable` | Contains **no** recording decisions. If you are adding an `if` about state or files here, it belongs in the coordinator with a test |
 | `AVFoundationCaptureService` | Camera, microphone, file output, interruptions, level metering | `recordingFinished` originates in exactly one delegate callback |
 | `RecordingFileStore` | Temp → permanent file movement | Never deletes on failure |
 | `Platform/*` | Every unconfirmed Apple symbol | Behind `PROMPTCAM_DUO`, off by default |
@@ -194,7 +196,20 @@ supported, so a spurious callback cannot light up controls that cannot work.
   on a saved or in-flight session, so it cannot become a route to a false save.
 - **A stop is never lost.** If it arrives before capture is confirmed it is
   queued until `.recordingStarted`; a watchdog fails the session if capture
-  never starts, rather than leaving it in `.finishing`.
+  never starts, rather than leaving it in `.finishing` — **and stops the
+  pipeline**, so a late start cannot begin an unattended recording.
+- **Outcome and file are separate facts.** `hasPersistedOutcome` and
+  `hasReconciledFile` are tracked independently, so recording a failure never
+  closes the door on the file that arrives afterwards.
+- **A file is never moved or exposed while the platform may still be writing
+  it.** `CaptureEvent.runtimeError` means "error, file may still be open": the
+  outcome is recorded, `preservedFilePath` stays `nil` (so no Recover action
+  appears), and reconciliation waits for the completion callback or the bounded
+  finalisation backstop. `recordingFailed` comes only from the completion
+  callback and *is* safe to reconcile immediately.
+- **Nothing is timestamped before there is a file.** No marker or question
+  change is recorded until `isCaptureConfirmed`; the opening question is written
+  at offset zero when the first byte lands.
 - Every terminal outcome is persisted under a stable identifier, and the
   repository upserts, so reconciliation updates one row instead of duplicating
   the interview.
@@ -256,9 +271,10 @@ device detection, bracket balance, and absence of false verification claims.
 | Build SDK | iOS 27.1 (Xcode 27.1) | Toolchain |
 | Device family | iPhone + iPad (`1,2`) | `project.yml` |
 | Orientations | Portrait + both landscapes | `project.yml` |
-| Configurations | `Debug`, `Duo`, `Release` | `project.yml` |
+| Configurations | `Debug`, `Duo`, `DuoRelease`, `Release` | `project.yml` |
 | Schemes | **PromptCam** (baseline) and **PromptCam (Duo)** | `project.yml` |
-| `PROMPTCAM_DUO` | set in the `Duo` configuration only | `SWIFT_ACTIVE_COMPILATION_CONDITIONS` |
+| `PROMPTCAM_DUO` | set in `Duo` and `DuoRelease` | `SWIFT_ACTIVE_COMPILATION_CONDITIONS` |
+| Duo scheme Archive | pinned to `DuoRelease` — **verify before uploading**, see `MAC_VALIDATION.md` step 8 | `project.yml` |
 | `PROMPTCAM_USE_ARRANGEMENT_VIEW` | off | Same, additionally requires `PROMPTCAM_DUO` |
 | Dependencies | **none** | `Package.swift` has zero |
 

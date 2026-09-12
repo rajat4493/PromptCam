@@ -44,7 +44,19 @@ public struct InterviewSessionEngine: Sendable {
     /// Bumped on every question change so the subject view can cue a transition.
     public private(set) var questionRevision: Int
     /// When capture actually began writing. `nil` until it does.
+    ///
+    /// Seeded at the button press and rebased when the platform confirms the
+    /// first byte, so marker offsets measure from the real start of the file.
     public private(set) var captureStartedAt: Date?
+    /// Whether the platform has confirmed capture is actually writing.
+    ///
+    /// **No timeline event is recorded until this is true.** Between the button
+    /// press and the first byte there is no file for an offset to point into,
+    /// and any offset computed in that window would be invalidated the moment
+    /// `noteCaptureStarted` rebases the start date. Rather than record events
+    /// and rebase them afterwards, the engine simply refuses to timestamp
+    /// anything until there is something to timestamp against.
+    public private(set) var isCaptureConfirmed: Bool = false
     /// Duration as last reported, used once capture has stopped.
     public private(set) var finalDuration: TimeInterval
     /// Microphone level, normalised 0...1.
@@ -96,6 +108,7 @@ public struct InterviewSessionEngine: Sendable {
         self.temporaryCapturePath = nil
         self.recoveredFilePath = nil
         self.resultIdentifier = UUID()
+        self.isCaptureConfirmed = false
     }
 
     // MARK: - Derived state
@@ -122,8 +135,11 @@ public struct InterviewSessionEngine: Sendable {
     public var canGoToPreviousQuestion: Bool { currentQuestionIndex > 0 }
 
     /// Elapsed capture time. Grows while recording, then freezes.
+    ///
+    /// Reports zero until capture is confirmed: a timer counting up while
+    /// nothing is being written tells the operator a comfortable lie.
     public func duration(now: Date) -> TimeInterval {
-        guard let start = captureStartedAt else { return finalDuration }
+        guard isCaptureConfirmed, let start = captureStartedAt else { return finalDuration }
         switch state {
         case .recording, .finishing:
             return max(0, now.timeIntervalSince(start))
@@ -194,22 +210,31 @@ public struct InterviewSessionEngine: Sendable {
         try machine.apply(.beginRecording)
         captureStartedAt = now
         temporaryCapturePath = temporaryPath
-        // Record the question that was on screen when capture began, so an
-        // export always has a question at offset zero.
+        isCaptureConfirmed = false
+        // Deliberately records no timeline event yet. The opening question is
+        // written by `noteCaptureStarted`, once there is a file for offset zero
+        // to mean something.
+    }
+
+    /// The pipeline confirmed capture actually started, at `now`.
+    ///
+    /// Rebases the start date onto the real first byte and opens the timeline.
+    /// The question on screen at this moment is recorded at offset zero, which
+    /// is the truthful answer to "what was being asked when the file begins".
+    ///
+    /// Ignored unless the session is still capturing, so a confirmation that
+    /// arrives after a stop or an interruption cannot corrupt offsets that have
+    /// already been measured.
+    public mutating func noteCaptureStarted(at now: Date) {
+        guard state.isCapturing, !isCaptureConfirmed else { return }
+        captureStartedAt = now
+        isCaptureConfirmed = true
+
         if let question = currentQuestion {
             questionChanges.append(
                 QuestionChangeModel(offset: 0, index: currentQuestionIndex, text: question)
             )
         }
-    }
-
-    /// The pipeline confirmed capture actually started, at `now`.
-    ///
-    /// Rebases the timeline so marker offsets measure from the real first byte
-    /// rather than from the button press.
-    public mutating func noteCaptureStarted(at now: Date) {
-        guard state.isCapturing else { return }
-        captureStartedAt = now
     }
 
     /// Operator asked to stop. The file is not complete yet.
@@ -261,6 +286,7 @@ public struct InterviewSessionEngine: Sendable {
         audioLevel = 0
         temporaryCapturePath = nil
         recoveredFilePath = nil
+        isCaptureConfirmed = false
     }
 
     /// Whether an event would be accepted, for enabling and disabling controls.
@@ -282,7 +308,10 @@ public struct InterviewSessionEngine: Sendable {
         guard index != currentQuestionIndex else { return false }
         currentQuestionIndex = index
         questionRevision += 1
-        if state.isCapturing, let start = captureStartedAt {
+        // Navigation is always allowed; only the *timestamp* waits for capture
+        // to be confirmed. A change made during start-up is reflected by the
+        // opening question `noteCaptureStarted` records at offset zero.
+        if canAddMarker, let start = captureStartedAt {
             questionChanges.append(
                 QuestionChangeModel(
                     offset: max(0, now.timeIntervalSince(start)),
@@ -306,15 +335,22 @@ public struct InterviewSessionEngine: Sendable {
 
     // MARK: - Markers
 
+    /// Whether a marker can be flagged right now.
+    ///
+    /// Requires confirmed capture, not merely the `.recording` state: during
+    /// the start-up window the state is `.recording` but no bytes exist yet.
+    public var canAddMarker: Bool { state.isCapturing && isCaptureConfirmed }
+
     /// Flag the current moment.
     ///
-    /// Only legal while capturing — a marker with no recording to point into
-    /// would be meaningless, so it is rejected rather than stored at offset 0.
+    /// Only legal while capture is confirmed — a marker with no file to point
+    /// into would be meaningless, so it is rejected rather than stored at an
+    /// offset that later rebasing would invalidate.
     ///
-    /// Returns the created marker, or `nil` if not recording.
+    /// Returns the created marker, or `nil` if it was refused.
     @discardableResult
     public mutating func addMarker(label: String? = nil, at now: Date) -> MarkerModel? {
-        guard state.isCapturing, let start = captureStartedAt else { return nil }
+        guard canAddMarker, let start = captureStartedAt else { return nil }
         let offset = max(0, now.timeIntervalSince(start))
         let resolvedLabel: String
         if let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

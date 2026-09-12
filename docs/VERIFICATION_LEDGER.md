@@ -1,6 +1,6 @@
 # PromptCam — Verification Ledger
 
-**Last updated:** 2026-09-12 (after review of `f272a18`)
+**Last updated:** 2026-09-12 (after the second review, of `973fbcc`/`5b95b06`)
 **Rule:** a row's Result may only be raised by an actual execution. No row is
 marked `VERIFIED_LINUX` without a command that ran here; nothing becomes
 `VERIFIED` on a Mac or a device without that Mac or device.
@@ -25,7 +25,7 @@ hardware result, or it stays as it is.
 | Result | Rows |
 |---|---|
 | `VERIFIED_LINUX` | 9 |
-| `STATICALLY_REVIEWED` | 24 + 8 regression rows |
+| `STATICALLY_REVIEWED` | 24 + 13 regression rows |
 | `REQUIRES_MAC` | 12 |
 | `REQUIRES_DUO_SIMULATOR` | 4 |
 | `REQUIRES_PHYSICAL_DUO` | 7 |
@@ -53,7 +53,7 @@ been compiled. Read the whole table before describing this app to anyone.
 ## B. Architectural invariants — executed here
 
 Command: `python3 Scripts/static_review.py` → **PASSED**
-(47 Swift files: Core 15/1827 lines, iOS 25/4235 lines, Tests 7/2319 lines; **130** declared test cases)
+(49 Swift files: Core 16/2418 lines, iOS 25/3963 lines, Tests 8/2913 lines; **155** declared test cases)
 
 | # | Requirement | Verification method | Evidence | Result | Remaining limitation |
 |---|---|---|---|---|---|
@@ -147,6 +147,35 @@ every other test here.
 
 ---
 
+## D3. Lifecycle defects found in the second review
+
+The first round's regression tests reached the engine and a duplicate store,
+not the orchestration — which is exactly where these defects lived. The
+orchestration therefore moved into `PromptCamCore` as
+`InterviewSessionCoordinator` (`SC-18`), and the iOS layer became a
+mirror-and-schedule wrapper holding no recording decisions.
+
+| # | Defect | Fix | Regression test | Result |
+|---|---|---|---|---|
+| R9 | The start-up watchdog called `applyFailure` but never asked the capture service to stop. A `recordingStarted` arriving afterwards began a recording nobody was waiting for, which continued indefinitely | `captureStartTimedOut` requests a stop and marks a pending stop; `handleRecordingStarted` stops capture outright when the session is no longer capturing | `CaptureStartupTimeoutTests` — 4 cases incl. "delayed start after a timeout is stopped, not adopted" | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R10 | `hasFinalised` conflated "outcome persisted" with "file reconciled". A runtime error set it, so the later completion callback was discarded and the finished file was lost. The same path also moved the file while AVFoundation might still have been writing it | Split into `hasPersistedOutcome` / `hasReconciledFile`. New `CaptureEvent.runtimeError` (non-final) records the outcome and leaves the file untouched; reconciliation waits for the completion callback or the bounded `finalisationTimedOut` backstop | `RuntimeErrorThenCompletionTests` — 3 cases incl. "the completion after a runtime error is NOT discarded" | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R11 | `PROMPTCAM_DUO` was absent from Release, and Archive defaults to Release — so archiving the Duo scheme would have produced an App Store build with the headline feature compiled out, silently | `DuoRelease` configuration (release-optimised, `PROMPTCAM_DUO` defined); the **PromptCam (Duo)** scheme pins Archive and Profile to it | n/a — build configuration; verify `-DPROMPTCAM_DUO` in the archive build log | `REQUIRES_MAC` |
+| R12 | Markers and question changes could be timestamped between the button press and the first byte, pointing at no file and then invalidated by the rebase | The engine records no timeline event until `isCaptureConfirmed`; `noteCaptureStarted` writes the opening question at offset zero; `duration` reports zero until confirmed | `TimelineGatingTests` (4) + engine tests (3) | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| R13 | The regression tests did not exercise the orchestrator — only the engine and a duplicate store — so they could not prove the round-one fixes | `SessionCoordinatorTests`: 25 cases driving the real coordinator with scripted capture-event sequences, the real `FakeCaptureService` call log, and a store on a real temporary directory | see below | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+
+### Scripted sequences covered by `SessionCoordinatorTests`
+
+timeout → delayed start · timeout → late completion · timeout → no completion
+(backstop) · runtime error (file untouched) · runtime error → completion ·
+duplicate completion ×3 · completion after save · interruption → completion ·
+interruption with no completion · stop during start-up → confirmation ·
+permission denied · store failure · accessory loss mid-take.
+
+**Still zero executed.** These are `STATICALLY_REVIEWED` like every other test
+in this repository.
+
+---
+
 ## E. Privacy and safety requirements
 
 | # | Requirement | Method | Evidence | Result |
@@ -161,7 +190,9 @@ every other test here.
 | E8 | Failed/abandoned temporary captures cleaned up | Sweeps `Captures/` only, skipping in-use paths and anything newer than one hour. **Cannot reach `Recordings/` or `Recovery/`** — R1 | Reviewed + 6 regression tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E9 | A captured file survives a later failure | `store` never deletes on move failure; the file is moved into `Recovery/` and that path is recorded, so the sweeper cannot reclaim it — R1 | Reviewed + tested | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E13 | A kept file is recoverable by the user, not just recorded | **Recover** share action, gated on `preservedFileExists` — R7 | Reviewed | `REQUIRES_MAC`, UAT 16 |
-| E14 | A file finalised after the session ended is never reported as saved | `finalise` routes an already-terminal session to reconciliation; `attachRecoveredFile` refuses on a saved session — R2 | Reviewed + 6 regression tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E14 | A file finalised after the session ended is never reported as saved | Reconciliation routes an already-terminal session away from `confirmSaved`; `attachRecoveredFile` refuses on a saved session — R2 | Reviewed + 6 regression tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E15 | A file is never moved or exposed while the platform may still be writing it | `runtimeError` is non-final: the outcome is recorded, the file is left in place and `preservedFilePath` stays `nil` so no Recover action appears — R10 | Reviewed + 3 orchestration tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
+| E16 | A failed session never leaves capture running | The watchdog stops the pipeline, and a late `recordingStarted` on a terminal session is stopped rather than adopted — R9 | Reviewed + 4 orchestration tests | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E10 | No recording silently deleted | Library delete removes the row only, never the file | Reviewed | `STATICALLY_REVIEWED` → `REQUIRES_MAC` |
 | E11 | No camera kept alive to unlock outer-screen behaviour | `tearDown()` on close; no such coupling exists | Reviewed | `VERIFIED_LINUX` (absence) |
 | E12 | No private APIs | Static review symbol list; all APIs are public Apple surface | Reviewed | `VERIFIED_LINUX` (absence) |

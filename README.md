@@ -81,8 +81,14 @@ choose a simulator and press ⌘R.
 
 ### 4. Enable the iPhone Duo code paths
 
-Select the **PromptCam (Duo)** scheme, which builds the `Duo` configuration
-(Debug + `PROMPTCAM_DUO`).
+Select the **PromptCam (Duo)** scheme: it runs the `Duo` configuration
+(Debug + `PROMPTCAM_DUO`) and **archives** the `DuoRelease` configuration
+(release-optimised + `PROMPTCAM_DUO`).
+
+That second half matters — Archive defaults to Release, so without it an App
+Store build would ship with the Duo feature compiled out and nothing to say so.
+Verify with the archive check in `docs/MAC_VALIDATION.md` step 8 before any
+upload.
 
 The plain **PromptCam** scheme stays Duo-free, so an unconfirmed API signature
 can never block the baseline build or the test run — get that green first. See
@@ -104,7 +110,7 @@ PromptCamiOS    — SwiftUI, AVFoundation, SwiftData.
                   behind the PROMPTCAM_DUO flag.
 ```
 
-Three rules do most of the work:
+Four rules do most of the work:
 
 - **`.saved` has exactly one inbound edge**, and it originates in
   AVFoundation's own "recording finished" callback. The app cannot structurally
@@ -114,6 +120,9 @@ Three rules do most of the work:
 - **Anything worth keeping leaves the swept directory.** `Captures/` is cleaned
   up; `Recordings/` and `Recovery/` never are. A file the app promises to keep
   is moved to `Recovery/` and offered back through an in-app Recover action.
+- **A file is never moved or shown while the platform may still be writing it.**
+  A runtime error records the outcome and waits; only a completion callback —
+  or a bounded backstop — lets the file be touched.
 
 Both surfaces read from one `InterviewSessionEngine`, so they cannot disagree
 about the current question, the countdown, the recording state or the duration.

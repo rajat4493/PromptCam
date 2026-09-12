@@ -64,7 +64,7 @@ struct DirectorSessionView: View {
         // cannot end an interview.
         .interactiveDismissDisabled(model.blocksDismissal)
         .promptCamHingeObservation(
-            isEnabled: model.engine.flags.hingeObservationEnabled,
+            isEnabled: model.flags.hingeObservationEnabled,
             onChange: { model.foldPositionChanged($0) }
         )
         // Declares the subject-facing surface. Safe to attach unconditionally:
@@ -292,7 +292,7 @@ struct DirectorSessionView: View {
                 .frame(width: Theme.HitTarget.minimum, height: Theme.HitTarget.minimum)
         }
         .buttonStyle(.bordered)
-        .disabled(!model.engine.canGoToPreviousQuestion)
+        .disabled(!model.canGoToPreviousQuestion)
         .accessibilityLabel("Previous question")
 
         Button {
@@ -302,7 +302,7 @@ struct DirectorSessionView: View {
                 .frame(width: Theme.HitTarget.minimum, height: Theme.HitTarget.minimum)
         }
         .buttonStyle(.bordered)
-        .disabled(!model.engine.canGoToNextQuestion)
+        .disabled(!model.canGoToNextQuestion)
         .accessibilityLabel("Next question")
     }
 

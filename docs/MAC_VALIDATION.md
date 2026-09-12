@@ -169,6 +169,21 @@ The `Duo` configuration is Debug plus `PROMPTCAM_DUO`. The plain **PromptCam**
 scheme stays Duo-free, so you can always fall back to a known-good baseline
 while resolving an API signature.
 
+**Before any TestFlight or App Store upload, verify the archive.** Archive
+defaults to the *release* configuration, so a Duo scheme that only ever built a
+Debug-like configuration would ship an app with the headline feature compiled
+out and nothing to indicate it. The **PromptCam (Duo)** scheme pins Archive to
+the `DuoRelease` configuration; confirm that actually took effect:
+
+```bash
+xcodebuild -project PromptCam.xcodeproj -scheme 'PromptCam (Duo)' \
+  -configuration DuoRelease -destination 'generic/platform=iOS' \
+  archive -archivePath /tmp/PromptCam.xcarchive | grep -c 'DPROMPTCAM_DUO'
+```
+
+A count of zero means the Duo code paths are **not** in the archive. Do not
+upload it.
+
 Everything that breaks now is in
 `Sources/PromptCamiOS/Platform/` by design. Work through the five files:
 
