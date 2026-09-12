@@ -126,28 +126,28 @@ final class InMemoryDeckRepository: DeckRepository, @unchecked Sendable {
         for deck in initial { storage[deck.id] = deck }
     }
 
-    func loadDecks() throws -> [DeckModel] {
+    func loadDecks() async throws -> [DeckModel] {
         lock.lock(); defer { lock.unlock() }
         return storage.values.sorted { $0.createdAt < $1.createdAt }
     }
 
-    func save(_ deck: DeckModel) throws {
+    func save(_ deck: DeckModel) async throws {
         if let writeError { throw writeError }
         lock.lock(); storage[deck.id] = deck; lock.unlock()
     }
 
-    func delete(deckID: UUID) throws {
+    func delete(deckID: UUID) async throws {
         if let writeError { throw writeError }
         lock.lock(); storage[deckID] = nil; lock.unlock()
     }
 
-    func seedSampleDeckIfNeeded(now: Date) throws {
+    func seedSampleDeckIfNeeded(now: Date) async throws {
         lock.lock()
         let alreadySeeded = seeded
         seeded = true
         lock.unlock()
         guard !alreadySeeded else { return }
-        try save(DeckModel.sampleTestimonialDeck(now: now))
+        try await save(DeckModel.sampleTestimonialDeck(now: now))
     }
 }
 
@@ -156,17 +156,17 @@ final class InMemoryRecordingRepository: RecordingRepository, @unchecked Sendabl
     private var storage: [UUID: InterviewRecordingModel] = [:]
     var writeError: Error?
 
-    func loadRecordings() throws -> [InterviewRecordingModel] {
+    func loadRecordings() async throws -> [InterviewRecordingModel] {
         lock.lock(); defer { lock.unlock() }
         return storage.values.sorted { $0.startedAt > $1.startedAt }
     }
 
-    func save(_ recording: InterviewRecordingModel) throws {
+    func save(_ recording: InterviewRecordingModel) async throws {
         if let writeError { throw writeError }
         lock.lock(); storage[recording.id] = recording; lock.unlock()
     }
 
-    func delete(recordingID: UUID) throws {
+    func delete(recordingID: UUID) async throws {
         lock.lock(); storage[recordingID] = nil; lock.unlock()
     }
 }

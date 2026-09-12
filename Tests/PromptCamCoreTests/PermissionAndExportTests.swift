@@ -278,22 +278,24 @@ struct ExportFailureTests {
     }
 
     @Test("A repository write failure surfaces rather than being swallowed")
-    func repositoryWriteFailureSurfaces() {
+    func repositoryWriteFailureSurfaces() async {
         let repository = InMemoryRecordingRepository()
         repository.writeError = RecordingStoreError.moveFailed("simulated export failure")
 
-        #expect(throws: (any Error).self) {
-            try repository.save(
+        await #expect(throws: (any Error).self) {
+            try await repository.save(
                 InterviewRecordingModel(
                     deckName: "D", startedAt: Date(), duration: 1, outcome: .saved
                 )
             )
         }
-        #expect((try? repository.loadRecordings())?.isEmpty == true)
+
+        let stored = try? await repository.loadRecordings()
+        #expect(stored?.isEmpty == true)
     }
 
     @Test("A failed marker export leaves the recording itself intact")
-    func markerExportFailureDoesNotAffectRecording() throws {
+    func markerExportFailureDoesNotAffectRecording() async throws {
         let repository = InMemoryRecordingRepository()
         let recording = InterviewRecordingModel(
             deckName: "D",
@@ -303,7 +305,7 @@ struct ExportFailureTests {
             fileName: "a.mov",
             markers: [MarkerModel(offset: 5, label: "M")]
         )
-        try repository.save(recording)
+        try await repository.save(recording)
 
         // Simulate the share sheet or file write failing after the fact.
         struct ExportFailed: Error {}
@@ -311,7 +313,7 @@ struct ExportFailureTests {
 
         #expect(exportResult.isFailure)
         // The interview is still in the library and still playable.
-        let reloaded = try repository.loadRecordings()
+        let reloaded = try await repository.loadRecordings()
         #expect(reloaded.count == 1)
         #expect(reloaded[0].outcome.isPlayable)
         #expect(reloaded[0].markers.count == 1)

@@ -1,0 +1,120 @@
+# XcodeGen specification for the PromptCam iOS application.
+#
+# NOT YET GENERATED OR BUILT. This file has never been run through XcodeGen and
+# the resulting project has never been compiled, because this repository was
+# authored on Linux with no Apple toolchain available. Status: REQUIRES_MAC.
+#
+# To generate, on a Mac with Xcode 27.1 or later:
+#
+#   brew install xcodegen
+#   xcodegen generate
+#   open PromptCam.xcodeproj
+#
+# See docs/MAC_VALIDATION.md for the full first-run sequence, and
+# docs/APPLE_API_CORRECTIONS.md for where to record anything that does not
+# compile as written.
+
+name: PromptCam
+options:
+  bundleIdPrefix: com.example.promptcam
+  deploymentTarget:
+    # Deployment target is 26.0 rather than 27.x on purpose: the ordinary-iPhone
+    # experience must be installable on phones that have not upgraded yet. The
+    # Duo code paths are compiled against the newer SDK and gated at runtime.
+    #
+    # Build with the iOS 27.1 SDK (Xcode 27.1) to get the intended edge-to-edge
+    # and vertical-control behaviour described in the supplied Apple guidance.
+    iOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  defaultConfig: Debug
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_STYLE: Automatic
+    # REQUIRES_MAC — set your Apple Developer team here, or select it in
+    # Xcode's Signing & Capabilities tab. Left blank deliberately: committing a
+    # team identifier would break every other developer's build.
+    DEVELOPMENT_TEAM: ""
+    TARGETED_DEVICE_FAMILY: "1,2"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+packages:
+  PromptCamCore:
+    path: .
+
+targets:
+  PromptCam:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/PromptCamiOS
+        excludes:
+          - "**/README.md"
+    dependencies:
+      - package: PromptCamCore
+        product: PromptCamCore
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: PromptCam
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: ""
+        # Portrait and both landscapes. Deliberately NOT restricted to
+        # portrait: the director console must work in landscape, which is how
+        # most interviews are framed.
+        #
+        # Per the supplied guidance, an open inner display does not rely on
+        # this configuration for layout decisions — size classes, scene
+        # geometry, safe areas and reserved regions do that work instead.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Accurate, specific purpose strings. An inaccurate or generic string
+        # is both an App Review risk and a trust problem, and a missing one
+        # crashes the app the first time capture is requested.
+        NSCameraUsageDescription: >-
+          PromptCam uses the camera to record the interview you are filming.
+          Video is saved on this device and is never uploaded.
+        NSMicrophoneUsageDescription: >-
+          PromptCam uses the microphone to record what the person you are
+          interviewing says. Audio is saved on this device and is never
+          uploaded.
+        # Recording continues while the screen is active; PromptCam does not
+        # request background audio, because capturing after the operator
+        # leaves the app would be a privacy surprise.
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.promptcam.PromptCam
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        # To enable the iPhone Duo code paths, add PROMPTCAM_DUO here:
+        #   SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG PROMPTCAM_DUO
+        # Off by default so the baseline build and test run cannot be blocked
+        # by an unconfirmed Duo API signature.
+        # See Sources/PromptCamiOS/Platform/README.md.
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+
+schemes:
+  PromptCam:
+    build:
+      targets:
+        PromptCam: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      # PromptCamCore's tests are run through Swift Package Manager
+      # (`swift test`), not through this scheme, so they stay runnable without
+      # a Simulator. See README.md.
+      targets: []

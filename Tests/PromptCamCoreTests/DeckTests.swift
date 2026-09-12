@@ -120,15 +120,15 @@ struct DeckTests {
 struct DeckPersistenceTests {
 
     @Test("A saved deck reloads with its questions in order")
-    func saveAndReload() throws {
+    func saveAndReload() async throws {
         let repository = InMemoryDeckRepository()
         var deck = DeckModel(name: "Founder interviews")
         deck.addQuestion("Why did you start?")
         deck.addQuestion("What nearly killed it?")
         deck.addQuestion("What's next?")
 
-        try repository.save(deck)
-        let reloaded = try repository.loadDecks()
+        try await repository.save(deck)
+        let reloaded = try await repository.loadDecks()
 
         #expect(reloaded.count == 1)
         #expect(reloaded[0].id == deck.id)
@@ -138,53 +138,55 @@ struct DeckPersistenceTests {
     }
 
     @Test("Reordering survives a save and reload")
-    func reorderSurvivesReload() throws {
+    func reorderSurvivesReload() async throws {
         let repository = InMemoryDeckRepository()
         var deck = DeckModel(name: "D")
         deck.addQuestion("A")
         deck.addQuestion("B")
         deck.addQuestion("C")
-        try repository.save(deck)
+        try await repository.save(deck)
 
         deck.moveQuestions(fromOffsets: IndexSet(integer: 0), toOffset: 3)
-        try repository.save(deck)
+        try await repository.save(deck)
 
-        let reloaded = try repository.loadDecks()
+        let reloaded = try await repository.loadDecks()
         #expect(reloaded[0].questions.map(\.text) == ["B", "C", "A"])
     }
 
     @Test("Deleting a deck removes it from the store")
-    func deleteDeck() throws {
+    func deleteDeck() async throws {
         let repository = InMemoryDeckRepository()
         let deck = DeckModel(name: "Temporary")
-        try repository.save(deck)
-        #expect(try repository.loadDecks().count == 1)
+        try await repository.save(deck)
+        let afterSave = try await repository.loadDecks()
+        #expect(afterSave.count == 1)
 
-        try repository.delete(deckID: deck.id)
-        #expect(try repository.loadDecks().isEmpty)
+        try await repository.delete(deckID: deck.id)
+        let afterDelete = try await repository.loadDecks()
+        #expect(afterDelete.isEmpty)
     }
 
     @Test("The sample deck is seeded once and not duplicated")
-    func seedOnce() throws {
+    func seedOnce() async throws {
         let repository = InMemoryDeckRepository()
         let now = Date(timeIntervalSince1970: 1000)
 
-        try repository.seedSampleDeckIfNeeded(now: now)
-        try repository.seedSampleDeckIfNeeded(now: now)
-        try repository.seedSampleDeckIfNeeded(now: now)
+        try await repository.seedSampleDeckIfNeeded(now: now)
+        try await repository.seedSampleDeckIfNeeded(now: now)
+        try await repository.seedSampleDeckIfNeeded(now: now)
 
-        let decks = try repository.loadDecks()
+        let decks = try await repository.loadDecks()
         #expect(decks.count == 1)
         #expect(decks[0].isSample)
     }
 
     @Test("A storage failure surfaces instead of being swallowed")
-    func saveFailureSurfaces() {
+    func saveFailureSurfaces() async {
         let repository = InMemoryDeckRepository()
         repository.writeError = RecordingStoreError.moveFailed("disk full")
 
         #expect(throws: (any Error).self) {
-            try repository.save(DeckModel(name: "Doomed"))
+            try await repository.save(DeckModel(name: "Doomed"))
         }
     }
 }
