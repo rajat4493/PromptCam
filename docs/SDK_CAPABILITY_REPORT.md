@@ -2,7 +2,19 @@
 
 **Date of reconnaissance:** 2026-09-12
 **Performed by:** Claude (TheDuck operating method, Stage A)
-**Status:** Reconnaissance complete. Several premises in the original brief were **not confirmed** and one was **contradicted**.
+**Status:** Reconnaissance complete. Several premises in the original brief were **not confirmed** from this environment.
+
+> ### ⚠ Read §9 first — this report was superseded in part
+>
+> Sections 1–8 record what I could and could not confirm **from Apple's
+> published documentation, on Linux, with no Apple toolchain.** After they were
+> written, the product owner supplied Apple's iPhone Duo developer guidance,
+> which asserts a set of APIs I had been unable to find.
+>
+> That guidance is authoritative product input and PromptCam is built to it. It
+> does not change what I was able to *verify* — which is still nothing
+> Duo-specific — so both records are kept. **§9 reconciles them.**
+> `docs/ASSUMPTIONS.md` is the current, consolidated register.
 
 This document separates what was *proven*, what was *disproven*, and what remains *assumed*. Nothing in this
 file is stated as fact unless the evidence column shows how it was checked.
@@ -334,3 +346,86 @@ xcrun swiftc -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" -target arm64-apple-
 
 That last command is the first thing to run on a Mac: it turns §2.2 from `DOC-VERIFIED` into
 `COMPILE-VERIFIED` in about ten seconds.
+
+---
+
+## 9. Addendum — reconciliation with the supplied Apple guidance
+
+Added after §1–8. The product owner supplied Apple's iPhone Duo developer
+guidance, naming APIs that my documentation searches did not find.
+
+### 9.1 What changed
+
+| Item | §3 said | Supplied guidance says | PromptCam now |
+|---|---|---|---|
+| `CameraCaptureAccessory` | not found | the camera-application scene accessory | **Used**, in `DuoSubjectAccessory.swift`, behind `PROMPTCAM_DUO` |
+| `onHingeChange` | not found | real, with `(previous, current)` and `hinge.status` / `hinge.angle` | Wired in `DuoHingeObserver.swift`, off by default |
+| Reserved regions | not found | `GeometryProxy.reservedRegions(kind:)`, `.division` / `.occlusion` | Used in `DuoReservedRegionLayout.swift` to keep controls off the hinge |
+| `ArrangementView` | not found | real, `.split` / `.overlay` | Behind a second flag; size-class layout is the default, per the guidance's own warning against novelty adoption |
+| Duo camera types + `AVCaptureDeviceDirectionCoordinator` | not found | real | Types listed; the coordinator is **deliberately not implemented** (see §9.4) |
+| Xcode 27.1 / iOS 27.1 | do not exist in published docs | Xcode 27.1 adds Duo support via Device Hub | Build SDK is 27.1; deployment target 26.0 |
+| Device Hub | not found | how Duo simulators are created | UAT 6 and 12 depend on it |
+
+### 9.2 What did NOT change
+
+Section 3's searches were real and are reproducible with the commands in §8.
+Across the complete SwiftUI, AVFoundation and UIKit symbol indexes, the iOS 27
+RC release notes, and all 407 documented frameworks, none of the Duo-specific
+symbols appeared, and the newest published versions were Xcode 27 RC and
+iOS 27 RC.
+
+The reconciliation I consider most likely: **the Duo APIs are newer than the
+public documentation archive I could reach** — a device announced around now,
+with its SDK arriving in 27.1. That is consistent with the supplied guidance and
+requires no one to be wrong.
+
+But it leaves one hard fact untouched: **I could not confirm a single
+Duo-specific signature.** None of them may be treated as known-correct, and the
+first Mac session must verify each one. `docs/APPLE_API_CORRECTIONS.md` has the
+20 questions pre-filled.
+
+### 9.3 What the supplied guidance improved
+
+Two things it told me that my searches could not, and which changed the design:
+
+1. **Accessory availability requires the app to be full-screen on the inner
+   display *and* to have an active camera-capture session**, with the system
+   owning availability and able to revoke it at any time. This is why
+   `SubjectDisplayAvailability` has four states rather than a boolean, why the
+   "Subject screen" toggle appears only once the camera is running, and why
+   losing the accessory never touches recording state.
+2. **The outer display behaves like a compact iPhone environment, and the open
+   inner display reports regular size classes in both axes.** That is what makes
+   a plain size-class layout correct, and it is why no foldable-specific layout
+   API was needed.
+
+It also confirmed my §4 decision to build the subject surface on
+`sceneAccessory` behind a protocol seam: `CameraCaptureAccessory` is used
+through the same `sceneAccessory` / `onAvailabilityChange` pattern I had already
+designed against, so adopting it changed one file.
+
+### 9.4 One supplied snippet deliberately not used
+
+`AVCaptureDeviceDirectionCoordinator(view:deviceTypes:changeHandler:)` is not
+implemented. Not scepticism — arithmetic. It carries five simultaneous unknowns
+(type name, three initialiser labels, the handler's parameter type, which the
+guidance calls "a map" without naming, and its actor isolation). Put in the
+app's startup path, a wrong label fails the build and a wrong handler type may
+compile and silently never fire.
+
+PromptCam records the subject with a **rear** camera, which does not change
+identity when the device folds, so nothing in V0 needs it. The seam exists,
+returns `false`, and documents the five unknowns and five completion steps.
+
+### 9.5 The fallback that stays on the record
+
+`ExternalNonInteractiveAccessory` (iOS 27.0) is the one second-surface type
+whose declaration I read directly, with Apple's own code samples. It uses the
+identical `sceneAccessory` / `onAvailabilityChange` shape, so if
+`CameraCaptureAccessory` does not resolve on a Mac, switching to it is a
+one-line change already documented in `DuoSubjectAccessory.swift`.
+
+It also carries a product consequence worth more than its fallback value:
+because it is documented for **external displays and AirPlay**, the
+subject-display experience may be testable today on a TV or an Apple TV — no
+foldable required. See `docs/HUMAN_SUMMARY.md`.

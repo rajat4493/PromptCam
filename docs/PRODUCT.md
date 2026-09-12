@@ -1,8 +1,15 @@
 # PromptCam — Product Definition (V0)
 
 **Status:** Stage B complete — concept challenged, scope locked.
-**Companion documents:** `SDK_CAPABILITY_REPORT.md` (what the SDK actually allows),
-`VERIFICATION_LEDGER.md` (what has been proven).
+**Companion documents:** `ASSUMPTIONS.md` (supplied vs documented vs assumed —
+the current consolidated register), `SDK_CAPABILITY_REPORT.md` (reconnaissance
+and its §9 reconciliation), `VERIFICATION_LEDGER.md` (what has been proven).
+
+> **Note on §5 and §11.** This document was written before the product owner
+> supplied Apple's iPhone Duo developer guidance. The product thesis, wedge,
+> scope, risks and success criteria are unchanged. Three implementation
+> decisions were updated in light of that guidance and are marked **(revised)**
+> below; `SDK_CAPABILITY_REPORT.md` §9 explains what changed and why.
 
 ---
 
@@ -176,10 +183,11 @@ cheapest to test — one afternoon with three interviewees. That test should hap
 
 | # | Decision | Rationale | Reversible? |
 |---|---|---|---|
-| D1 | Subject display built on `sceneAccessory` + `ExternalNonInteractiveAccessory` | Only documented second-surface API; works on external display/AirPlay today | Yes — isolated behind a protocol |
+| D1 **(revised)** | Subject display built on `sceneAccessory` + **`CameraCaptureAccessory`** — the camera-app accessory named in the supplied guidance — with `ExternalNonInteractiveAccessory` kept as the documented fallback | Same `sceneAccessory` / `onAvailabilityChange` pattern either way, so the seam is unchanged. The fallback also works on external displays and AirPlay today | Yes — one line in `DuoSubjectAccessory.swift` |
 | D2 | **No live preview on the subject surface in V0**, flag-gated off | Brief forbids faking a preview; capability unverified | Yes — flip one flag once verified |
-| D3 | No hinge/fold-specific code | No such API exists; writing it would be inventing API | Yes — additive when API appears |
-| D4 | Deployment target **iOS 26.0**, Duo path gated `@available(iOS 27.0, *)` | Keeps the fallback app installable on today's phones while the accessory path stays available on 27 | Yes — raise the floor to 27.0 |
+| D3 **(revised)** | Hinge state observed only for a pre-roll warning and diagnostics, never for layout; off by default | The supplied guidance itself says to use reserved regions and arrangement APIs for layout and to treat hinge data as interaction and effects | Yes — `FeatureFlags.hingeObservationEnabled` |
+| D4 **(revised)** | Build against the **iOS 27.1 SDK**; deployment target stays **iOS 26.0**, Duo paths gated | The supplied guidance says 27.1 provides the intended edge-to-edge and vertical-control behaviour; a 26.0 floor keeps the ordinary-iPhone app installable on phones that have not upgraded | Yes — raise the floor to 27.x |
+| D11 | All unverified Duo API isolated in `Platform/` behind `PROMPTCAM_DUO`, **off by default** | A single wrong signature must not block the baseline build or the test run. Enforced by `Scripts/static_review.py` | Yes — flip the flag once confirmed |
 | D5 | Local-only persistence via SwiftData | Matches privacy stance; no backend to operate | Yes |
 | D6 | Markers export as CSV **and** plain text | CSV for tooling, text for humans; both trivial | Yes |
 | D7 | Core logic in an SPM package (`PromptCamKit`), app is a thin shell | Makes the state machine and decks testable with `swift test`, no Simulator needed | Yes |
@@ -193,9 +201,11 @@ Answers would change architecture or scope; none block V0 implementation, and ea
 
 1. **Do you have, or can you get, a physical iPhone Duo?** Without one, S15 and UAT 6/12 stay `BLOCKED`
    permanently and the App Store listing must not claim Duo behaviour. *Default: proceed, mark blocked.*
-2. **Where did `CameraCaptureAccessory`, `onHingeChange`, reserved regions and "Device Hub" come from?** If
-   from a real NDA/beta SDK you have access to, that changes the design materially and I should use it. If from
-   a rumour or a generated summary, my `sceneAccessory`-based design stands. *Default: assume not real.*
+2. **Answered.** You supplied Apple's iPhone Duo developer guidance, and PromptCam is built to it. The
+   remaining question is narrower: **can you confirm any of those signatures in Xcode 27.1?** I could not find
+   one of them in Apple's published documentation (see `SDK_CAPABILITY_REPORT.md` §9), so all 20 open questions
+   in `APPLE_API_CORRECTIONS.md` are still open. *Default: treat every Duo signature as unconfirmed until a
+   compiler says otherwise.*
 3. **Ship first on external display / AirPlay, or hold for Duo hardware?** Shipping now gets real user
    evidence on P1–P3 months earlier. *Default: build so either is possible; recommend shipping.*
 4. **iOS floor: 26.0 or 27.0?** 27.0-only is simpler code but a much smaller install base at launch.
